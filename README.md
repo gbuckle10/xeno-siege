@@ -1,15 +1,15 @@
 # Xeno Siege
 
-An alien sci-fi tower defense game. The swarm pours out of a rift and marches down the lane toward your base. Build towers along the way to stop them.
+A 3D alien swarm tower defense game. Hundreds of aliens pour out of a rift and march down the lane toward your base. Build and upgrade towers to stop them.
 
 **Play / install:** https://gbuckle10.github.io/xeno-siege/
 
 ## Installing it as an app
 
-It's a Progressive Web App, so there's no app store involved and it works offline once installed.
+It's a Progressive Web App: no app store, and it works offline once installed.
 
-- **Android (Chrome):** open the link, then tap **⋮ → Install app** (or "Add to Home screen"). It gets its own icon and opens full screen. Play with the phone sideways for the best layout.
-- **PC (Chrome or Edge):** open the link and click the install icon at the right end of the address bar (or the **⬇ Install as app** button in the game's side panel). It opens in its own window and shows up in the Start menu.
+- **Android (Chrome):** open the link, then **⋮ → Install app**. Opens full screen in landscape.
+- **PC (Chrome or Edge):** open the link and click the install icon in the address bar, or the **⬇ Install as app** button in the side panel.
 - **iPhone/iPad (Safari):** Share → **Add to Home Screen**.
 
 Installed copies update themselves the next time they're opened online.
@@ -18,32 +18,49 @@ Installed copies update themselves the next time they're opened online.
 
 | | |
 |---|---|
-| **Build** | Pick a tower (or press 1–4), then click an empty tile. Hold Shift to place several. |
-| **Upgrade / sell** | Click a placed tower. Towers go up to level 3; selling refunds 70%. |
-| **Waves** | Press **Launch Wave** (or Space). Calling the next wave early earns bonus credits. |
-| **Other keys** | Esc / right-click cancels, P pauses, U upgrades the selected tower. |
+| **Build** | Pick a tower (or press 1–5), then tap/click an empty pad. Hold Shift to place several. |
+| **Upgrade** | Tap a placed tower. Level 1 → Level 2 → **choose a specialization** → Mk II. Upgrading takes a few seconds and the tower stops firing until it finishes. |
+| **Sell** | Tap a tower → Sell (70% refund). |
+| **Waves** | **Launch Wave** (or Space). Calling the next wave early earns bonus credits. |
+| **Camera** | Drag (or arrow keys / WASD) to pan, scroll wheel or pinch to zoom, ⤢ to see the whole map. |
+| **Other** | Esc / right-click cancels, P pauses, U upgrades the selected tower, **Gfx** switches High/Low graphics. |
 
-### Towers
-| Tower | Cost | Role |
-|---|---|---|
-| Pulse Laser | 50 | Fast single-target beam. Armor soaks a lot of each hit. |
-| Plasma Mortar | 90 | Slow lobbed shells with splash damage. |
-| Cryo Field | 70 | Slows every alien in range. |
-| Arc Coil | 130 | Chain lightning that ignores armor. |
+### Towers and specializations
+
+| Tower | Cost | Base role | Specialization A | Specialization B |
+|---|---|---|---|---|
+| Gatling Turret | 60 | Rapid-fire single target | **Minigun**: sprays the whole swarm | **Railgun**: pierces every alien in a line, ignores armor |
+| Plasma Mortar | 100 | Splash damage | **Cluster Bombard**: shells burst into bomblets | **Singularity Shell**: black hole holds aliens, then detonates |
+| Cryo Field | 80 | Slows everything in range | **Absolute Zero**: chance to freeze solid | **Shatter Field**: chilled aliens take extra damage |
+| Arc Coil | 140 | Chain lightning, ignores armor | **Storm Coil**: forks through huge chunks of the swarm | **Ion Lance**: continuous beam that ramps up, locks onto the toughest target |
+| Missile Battery | 160 | Homing missile salvos | **Hydra Pods**: huge salvos, one alien each | **Tactical Nuke**: one giant warhead at the densest cluster |
 
 ### Aliens
-Skitters (fast, fragile), Grunts (standard), Shellbacks (armored, slow), and a Hive Queen boss every 10th wave. Every 5th wave starting at wave 3 is a Skitter swarm.
+- **Skitter:** tiny, fast, arrives in hundreds.
+- **Grunt:** the standard foot soldier.
+- **Shellback:** slow and armored. Armor soaks bullets, splash and missiles.
+- **Brood Sac:** bursts into 8 Skitters when killed.
+- **Hive Queen:** a boss every 10th wave.
+
+Every 5th wave starting at wave 3 is a **mega swarm**.
 
 ## Project layout
 
 ```
-index.html              the whole game (HTML + CSS + JavaScript, no build step)
+index.html              page layout and styles
+js/game.js              game rules: towers, aliens, waves, upgrades (no graphics, runs in Node too)
+js/view.js              3D rendering with Three.js: instanced aliens, effects, camera
+js/models.js            3D models for aliens and every tower form, built from simple shapes
+js/main.js              game loop, mouse/touch input, side panel, install prompt
+vendor/three.bundle.js  Three.js + bloom post-processing, bundled (MIT licence in vendor/)
+tools/balance.mjs       balance bot: plays the game headlessly and reports per wave
 manifest.webmanifest    app name, icons, display mode for installing
 sw.js                   service worker: offline support and updates
-icons/                  app icons
-fonts/                  Orbitron and Rajdhani (SIL Open Font License)
+icons/  fonts/          app icons; Orbitron and Rajdhani fonts (SIL Open Font License)
 ```
 
-To run locally, serve the folder with any static server, e.g. `python3 -m http.server`, then open http://localhost:8000. Opening `index.html` directly also works, but the install/offline features need a server.
+No build step. To run locally: `python3 -m http.server 8000`, then open http://localhost:8000.
 
-**Releasing a change:** edit, then bump `VERSION` in `sw.js` so installed copies refresh their cache, commit, and push. GitHub Pages redeploys automatically.
+**Balance testing:** `node tools/balance.mjs [seed]` runs a scripted player through the waves and prints shields, credits, tower levels and peak alien count per wave.
+
+**Releasing a change:** edit, bump `VERSION` in `sw.js` so installed copies refresh, commit, push. GitHub Pages redeploys automatically.

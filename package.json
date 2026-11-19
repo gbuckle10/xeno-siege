@@ -1,0 +1,10 @@
+{
+  "name": "xeno-siege",
+  "private": true,
+  "type": "module",
+  "description": "Alien sci-fi tower defense. Static site, no build step.",
+  "scripts": {
+    "balance": "node tools/balance.mjs",
+    "serve": "python3 -m http.server 8000"
+  }
+}

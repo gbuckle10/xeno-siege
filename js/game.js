@@ -9,17 +9,17 @@ export const START_LIVES = 100;
 // and every lane must end on the same tile (the base). Lanes may share tiles where they merge.
 export const MAPS = [
   {
-    id: 'spiral', name: 'The Spiral', difficulty: 'Easy', cols: 24, rows: 15, credits: 260, hpScale: 1.0,
+    id: 'spiral', name: 'The Spiral', difficulty: 'Easy', cols: 24, rows: 15, credits: 280, hpScale: 0.9, airMul: 0.5,
     desc: 'One very long lane that coils inward to a base at the centre. Plenty of time to shoot.',
     lanes: [[[-1,1],[22,1],[22,13],[1,13],[1,4],[19,4],[19,10],[4,10],[4,7],[12,7]]],
   },
   {
-    id: 'valley', name: 'Rift Valley', difficulty: 'Normal', cols: 24, rows: 15, credits: 220, hpScale: 1.1,
+    id: 'valley', name: 'Rift Valley', difficulty: 'Normal', cols: 24, rows: 15, credits: 260, hpScale: 1.1,
     desc: 'A single winding lane through the valley. The classic.',
     lanes: [[[-1,2],[5,2],[5,7],[2,7],[2,12],[10,12],[10,4],[15,4],[15,10],[20,10],[20,6],[22,6]]],
   },
   {
-    id: 'twin', name: 'Twin Rifts', difficulty: 'Hard', cols: 24, rows: 15, credits: 260, hpScale: 1.0,
+    id: 'twin', name: 'Twin Rifts', difficulty: 'Hard', cols: 24, rows: 15, credits: 300, hpScale: 0.9,
     desc: 'Two rifts split the swarm into lanes that merge halfway. Cover both or get flanked.',
     lanes: [
       [[-1,2],[6,2],[6,6],[11,6],[11,7],[16,7],[16,2],[20,2],[20,12],[22,12]],
@@ -27,7 +27,7 @@ export const MAPS = [
     ],
   },
   {
-    id: 'hive', name: 'Hive Breach', difficulty: 'Brutal', cols: 24, rows: 15, credits: 300, hpScale: 1.2,
+    id: 'hive', name: 'Hive Breach', difficulty: 'Brutal', cols: 24, rows: 15, credits: 340, hpScale: 0.95,
     desc: 'Three rifts converge on a short run to your base. Only for veterans.',
     lanes: [
       [[8,-1],[8,7],[13,7],[13,2],[18,2],[18,12],[22,12]],
@@ -37,7 +37,7 @@ export const MAPS = [
   },
 ];
 
-function buildMap(def) {
+export function buildMap(def) {
   const m = { ...def, paths: [], pathTiles: new Set(), entrances: new Set() };
   for (const pts of def.lanes) {
     const way = pts.map(([c, r]) => ({ x: c + 0.5, z: r + 0.5 }));
@@ -56,11 +56,17 @@ function buildMap(def) {
     m.paths.push({ way, seg, len });
     m.entrances.add(pts[0][0] + ',' + pts[0][1]);
   }
-  m.base = m.paths[0].way[m.paths[0].way.length - 1];
+  m.flights = [];
+  m.base = def.base ? { x: def.base[0] + 0.5, z: def.base[1] + 0.5 }
+    : m.paths.length ? m.paths[0].way[m.paths[0].way.length - 1] : null;
+  if (m.base) for (const p of m.paths) {
+    const a = p.way[0], b = m.base, l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    m.flights.push({ way: [a, b], seg: [{ a, b, len: l, start: 0, ux: (b.x - a.x) / l, uz: (b.z - a.z) / l }], len: l });
+  }
   return m;
 }
 const MAP_CACHE = new Map(MAPS.map(d => [d.id, buildMap(d)]));
-export const getMap = id => MAP_CACHE.get(id) || MAP_CACHE.get('valley');
+export const getMap = id => (id && typeof id === 'object') ? id : (MAP_CACHE.get(id) || MAP_CACHE.get('valley'));
 export const MAP_IDS = MAPS.map(d => d.id);
 
 // Point on a lane's centre line at distance d (no sideways offset).
@@ -80,6 +86,11 @@ export function rankBuildSpots(map, range = 3) {
     if (map.pathTiles.has(c + ',' + r)) continue;
     let score = 0;
     for (const [pc, pr] of tiles) if (Math.hypot(pc - c, pr - r) <= range) score++;
+    // Flyers cut straight across: covering their flight lines matters too
+    for (const f of map.flights || []) for (let k = 0; k <= f.len; k += 1) {
+      const fx = f.way[0].x + f.seg[0].ux * k - 0.5, fz = f.way[0].z + f.seg[0].uz * k - 0.5;
+      if (Math.hypot(fx - c, fz - r) <= range) score += 0.3;
+    }
     out.push({ c, r, score });
   }
   return out.sort((a, b) => b.score - a.score || a.c - b.c || a.r - b.r);
@@ -89,7 +100,7 @@ export function rankBuildSpots(map, range = 3) {
 // Each tower: base stats (level 1), l2 overrides, then two branches with a (level 3) and b (level 4 / Mk II) overrides.
 export const TOWERS = {
   gatling: {
-    name: 'Gatling Turret', key: '1', cost: 60, color: '#4df3c9',
+    name: 'Gatling Turret', key: '1', cost: 60, color: '#4df3c9', air: true,
     desc: 'Rapid-fire cannon. Shreds small aliens, but armor soaks a lot of each bullet.',
     base: { kind: 'bullet', range: 3.2, rate: 0.14, dmg: 6, spread: 1 },
     l2:   { dmg: 9, range: 3.5, rate: 0.12 },
@@ -103,7 +114,7 @@ export const TOWERS = {
     },
   },
   mortar: {
-    name: 'Plasma Mortar', key: '2', cost: 100, color: '#ff9f43',
+    name: 'Plasma Mortar', key: '2', cost: 100, color: '#ff9f43', air: false,
     desc: 'Lobs plasma shells that splash whole clusters of aliens.',
     base: { kind: 'mortar', range: 4.2, rate: 1.7, dmg: 28, splash: 0.9 },
     l2:   { dmg: 45, splash: 1.0, rate: 1.5 },
@@ -117,7 +128,7 @@ export const TOWERS = {
     },
   },
   cryo: {
-    name: 'Cryo Field', key: '3', cost: 80, color: '#7cc7ff',
+    name: 'Cryo Field', key: '3', cost: 80, color: '#7cc7ff', air: false,
     desc: 'Pulses frost at every alien in range, slowing them down for your other guns.',
     base: { kind: 'cryo', range: 2.2, rate: 1.0, dmg: 3, slow: 0.4, slowDur: 1.5 },
     l2:   { range: 2.5, slow: 0.5, dmg: 5 },
@@ -131,7 +142,7 @@ export const TOWERS = {
     },
   },
   arc: {
-    name: 'Arc Coil', key: '4', cost: 140, color: '#c792ff',
+    name: 'Arc Coil', key: '4', cost: 140, color: '#c792ff', air: true,
     desc: 'Lightning that jumps between aliens and ignores armor.',
     base: { kind: 'arc', range: 3.0, rate: 1.1, dmg: 22, chain: 3, jump: 1.5, decay: 0.88 },
     l2:   { dmg: 34, chain: 4 },
@@ -145,7 +156,7 @@ export const TOWERS = {
     },
   },
   missile: {
-    name: 'Missile Battery', key: '5', cost: 160, color: '#ff5c7a',
+    name: 'Missile Battery', key: '5', cost: 160, color: '#ff5c7a', air: true,
     desc: 'Fires salvos of homing missiles, each at a different alien.',
     base: { kind: 'missile', range: 4.6, rate: 2.0, dmg: 26, splash: 0.6, salvo: 3 },
     l2:   { dmg: 38, salvo: 4, rate: 1.8 },
@@ -157,6 +168,20 @@ export const TOWERS = {
         desc: 'One enormous warhead aimed at the densest part of the swarm. Slow to reload.',
         a: { salvo: 1, dmg: 480, splash: 2.3, rate: 6, range: 6 }, b: { salvo: 1, dmg: 1050, splash: 2.9, rate: 5.5, range: 7 } },
     },
+  },
+};
+TOWERS.sunlance = {
+  name: 'Sunlance', key: '6', cost: 220, color: '#ffe066', manual: true, air: true,
+  desc: 'You aim it. A map-wide beam that burns through everything in a straight line. Long cooldown.',
+  base: { kind: 'beam', rate: 9, dmg: 600, width: 0.45, range: 1.4 },
+  l2:   { dmg: 1400, rate: 8 },
+  branches: {
+    prism: { name: 'Prism Splitter', cost: 330, cost2: 660,
+      desc: 'Splits the beam into a fan of 3 beams (5 at Mk II). Rakes whole sections of the map.',
+      a: { beams: 3, spread: 0.26, dmg: 2400, rate: 7.5 }, b: { beams: 5, spread: 0.22, dmg: 5500, rate: 6.5 } },
+    scorch: { name: 'Scorch Line', cost: 350, cost2: 700,
+      desc: 'The beam leaves a burning strip on the ground that keeps damaging anything that crosses it.',
+      a: { dmg: 3200, burn: 600, burnTime: 4, width: 0.55, rate: 7.5 }, b: { dmg: 7500, burn: 1500, burnTime: 6, width: 0.6, rate: 6.5 } },
   },
 };
 export const TOWER_TYPES = Object.keys(TOWERS);
@@ -183,37 +208,77 @@ export function upgradeOptions(t) {
 }
 export const sellValue = t => Math.floor(t.spent * 0.7);
 
+// ---------- Powers (paid for with Energy, which kills and wave clears generate) ----------
+export const MAX_ENERGY = 100;
+export const ENERGY_PER_REWARD = 0.35;   // energy per credit of kill reward
+export const ENERGY_PER_WAVE = 8;
+export const POWERS = {
+  meteor:    { name: 'Meteor Shower',  key: 'z', icon: '☄', cost: 35, cd: 18, radius: 2.0, target: true, color: '#ff9f43',
+               desc: 'A rain of meteors hammers a small area.' },
+  orbital:   { name: 'Orbital Strike', key: 'x', icon: '⊕', cost: 50, cd: 30, radius: 1.1, target: true, color: '#fff1a8',
+               desc: 'After a short charge, a beam from orbit obliterates one spot. Great against bosses.' },
+  stasis:    { name: 'Stasis Field',   key: 'c', icon: '❄', cost: 35, cd: 25, radius: 2.5, target: true, color: '#7cc7ff',
+               desc: 'Freezes every alien in an area for 4 seconds (bosses are only slowed).' },
+  overdrive: { name: 'Overdrive',      key: 'v', icon: '⚡', cost: 60, cd: 45, target: false, color: '#c792ff',
+               desc: 'All towers fire twice as fast for 8 seconds.' },
+  repair:    { name: 'Repair Drones',  key: 'b', icon: '✚', cost: 70, cd: 60, target: false, color: '#4df3c9',
+               desc: 'Restores 20 shields.' },
+};
+export const POWER_IDS = Object.keys(POWERS);
+
 // ---------- Aliens ----------
 export const ALIENS = {
-  skitter: { name: 'Skitter',    hp: 14,   speed: 2.0,  reward: 0.5, dmg: 1,  r: 0.14, color: '#9cff57' },
-  grunt:   { name: 'Grunt',      hp: 55,   speed: 1.2,  reward: 3,   dmg: 2,  r: 0.22, color: '#57e3ff' },
+  skitter: { name: 'Skitter',    hp: 14,   speed: 2.0,  reward: 0.65, dmg: 1,  r: 0.14, color: '#9cff57' },
+  grunt:   { name: 'Grunt',      hp: 55,   speed: 1.2,  reward: 3.5, dmg: 2,  r: 0.22, color: '#57e3ff' },
   shell:   { name: 'Shellback',  hp: 230,  speed: 0.8,  reward: 10,  dmg: 5,  r: 0.30, armor: 6, color: '#ff6bd6' },
   brood:   { name: 'Brood Sac',  hp: 170,  speed: 0.9,  reward: 8,   dmg: 4,  r: 0.30, split: 8, color: '#c77dff' },
+  wasp:    { name: 'Wasp',       hp: 15,   speed: 1.2,  reward: 2,   dmg: 2,  r: 0.18, air: true, color: '#ff7b4f' },
+  warden:  { name: 'Warden',     hp: 130,  speed: 0.85, reward: 7,   dmg: 3,  r: 0.26, aura: 1.4, color: '#e8e2ff' },
   queen:   { name: 'Hive Queen', hp: 1800, speed: 0.75, reward: 150, dmg: 20, r: 0.60, armor: 4, boss: true, color: '#ffd166' },
 };
-export const hpMult = w => 1.17 ** (w - 1) * (1 + 0.05 * (w - 1));
+// Alien toughness per wave. Polynomial growth tracks how fast a player's defences grow
+// (so the pressure stays steady), with a small exponential term so every run ends eventually.
+export const TUNING = { hpA: 0.03, hpB: 1.13, lateFrom: 14, lateB: 1.05 };
+export const hpMult = w => (1 + TUNING.hpA * (w - 1)) * TUNING.hpB ** (w - 1) * TUNING.lateB ** Math.max(0, w - TUNING.lateFrom);
+// Later waves get bigger and faster, not just tougher
+export const countGrowth = w => 1 + 0.03 * (w - 1);
+// Armor creeps up on the tougher aliens, so spamming many small hits stops being enough
+export const armorGrowth = (type, w) => type === 'skitter' || type === 'wasp' ? 0 : Math.floor((w - 1) / (type === 'shell' || type === 'queen' ? 3 : 6));
+export const speedGrowth = w => 1 + Math.min(0.4, 0.012 * (w - 1));
 
 // ---------- Waves ----------
 // A wave is a list of groups that spawn one after another: { type, n, gap (s between spawns), wait (s before the group) }.
-export function buildWave(w) {
+// Rules let custom maps change how waves are built. Built-in maps use the defaults.
+export const DEFAULT_RULES = {
+  countMul: 1, hpMul: 1, speedMul: 1, credits: null, lives: 100,
+  bossEvery: 10, swarmEvery: 5, winWave: 0, autoWaves: true,
+  enabled: { skitter: true, grunt: true, wasp: true, shell: true, warden: true, brood: true, queen: true },
+};
+export const normalizeRules = r => ({ ...DEFAULT_RULES, ...(r || {}), enabled: { ...DEFAULT_RULES.enabled, ...((r && r.enabled) || {}) } });
+
+export function buildWave(w, rules = DEFAULT_RULES) {
+  const R = rules, on = R.enabled;
   const g = [];
   // maxDur squeezes big groups into a fixed window so late waves arrive as a flood, not a trickle.
   const add = (type, n, gap, maxDur, wait = 0.6) => {
-    n = Math.round(n);
-    if (n > 0) g.push({ type, n, gap: Math.min(gap, maxDur / n), wait });
+    n = Math.round(n * (type === 'queen' ? 1 : R.countMul * countGrowth(w)));
+    if (n > 0 && on[type]) g.push({ type, n, gap: Math.min(gap, maxDur / n), wait });
   };
-  add('skitter', 20 + w * 10, 0.06, 6, 0);
-  add('grunt', 3 + w * 1.6, 0.35, 10);
-  if (w >= 4) add('shell', (w - 2) * 0.7, 0.9, 10);
-  if (w >= 6) add('brood', (w - 4) * 0.5, 1.2, 10);
-  if (w % 5 === 3) add('skitter', 60 + w * 22, 0.03, 5, 1);  // swarm wave
+  add('skitter', 18 + w * 9, 0.06, 6, 0);
+  add('grunt', 3 + w * 1.7, 0.35, 9);
+  if (w >= 4) add('wasp', 2 + w * 0.8 + Math.max(0, w - 10) * 0.6, 0.25, 6);
+  if (w >= 4) add('shell', 1 + (w - 4) * 0.8 + Math.max(0, w - 12) * 0.4, 0.9, 9);
+  if (w >= 5) add('warden', 1 + (w - 5) * 0.4, 1.0, 8);
+  if (w >= 6) add('brood', (w - 4) * 0.5, 1.2, 9);
+  if (R.swarmEvery && w % R.swarmEvery === 0) add('skitter', 20 + w * 16, 0.03, 5, 1);  // mega swarm
   add('skitter', 10 + w * 6, 0.08, 5);
-  if (w % 10 === 0) add('queen', w / 10, 4, 8, 1.5);         // boss wave
+  if (R.bossEvery && w % R.bossEvery === 0) add('queen', Math.max(1, Math.round(w / 10)), 4, 8, 1.5);  // boss wave
+  if (!g.length) g.push({ type: 'skitter', n: Math.round((20 + w * 10) * R.countMul), gap: 0.06, wait: 0 });
   return g;
 }
-export function waveSummary(w) {
+export function waveSummary(w, rules) {
   const counts = {};
-  for (const g of buildWave(w)) counts[g.type] = (counts[g.type] || 0) + g.n;
+  for (const g of buildWave(w, rules)) counts[g.type] = (counts[g.type] || 0) + g.n;
   return counts;
 }
 
@@ -254,19 +319,21 @@ export class Game {
     this.rand = opts.rand || Math.random;
     this._q = []; this._q2 = []; this._hit = new Set(); this._p = {};
     this.demo = false;          // demo battle on the home screen: leaks cost nothing
-    this.setMap(opts.map || 'valley');
+    this.setMap(opts.map || 'valley', opts.rules);
   }
 
-  setMap(id) {
+  setMap(id, rules) {
     this.map = getMap(id);
+    this.rules = normalizeRules(rules);
     this.grid = new Grid(this.map.cols, this.map.rows);
     this.reset();
   }
 
   reset() {
     Object.assign(this, {
-      credits: this.map.credits, lives: START_LIVES, wave: 0, kills: 0, time: 0,
-      enemies: [], pending: [], towers: [], projectiles: [], wells: [], events: [],
+      credits: this.rules.credits ?? this.map.credits, lives: this.rules.lives, maxLives: this.rules.lives, wave: 0, kills: 0, time: 0,
+      enemies: [], pending: [], towers: [], projectiles: [], wells: [], events: [], burns: [], strikes: [],
+      energy: 0, powerCd: {}, overdriveT: 0, won: false, nextIn: null, nextMax: 0,
       groups: [], gi: 0, gCount: 0, gTimer: 0, waveActive: false, over: false, uid: 0, spawnIdx: 0,
     });
     this.grid.clear();
@@ -278,12 +345,12 @@ export class Game {
   // ----- Enemies -----
   spawnEnemy(type, d = 0, off = null, pi = null) {
     const a = ALIENS[type], w = Math.max(1, this.wave);
-    const hp = Math.round(a.hp * (a.boss ? hpMult(w) ** 0.88 : hpMult(w)) * this.map.hpScale);
+    const hp = Math.round(a.hp * (a.boss ? hpMult(w) ** 0.88 : hpMult(w)) * this.map.hpScale * this.rules.hpMul);
     const e = {
-      id: ++this.uid, type, hp, max: hp, d, pi: pi ?? (this.spawnIdx++ % this.map.paths.length),
-      speed: a.speed * (0.92 + this.rand() * 0.16), armor: a.armor || 0,
-      reward: a.reward * (1 + 0.02 * (w - 1)), dmg: a.dmg,
-      off: off ?? (a.boss ? 0 : (this.rand() - 0.5) * 0.72),
+      id: ++this.uid, type, hp, max: hp, d, pi: pi ?? (this.spawnIdx++ % Math.max(1, this.map.paths.length)),
+      speed: a.speed * this.rules.speedMul * speedGrowth(w) * (0.92 + this.rand() * 0.16), armor: (a.armor || 0) + armorGrowth(type, w),
+      reward: a.reward * (1 + 0.02 * (w - 1)) / Math.sqrt(countGrowth(w)), dmg: a.dmg,
+      off: off ?? (a.boss ? 0 : (this.rand() - 0.5) * (a.air ? 1.6 : 0.72)), air: !!a.air, shielded: false,
       x: 0, z: 0, dx: 1, dz: 0, si: 0,
       slowT: 0, slowAmt: 0, freezeT: 0, brittleT: 0, brittle: 0, hit: 0, wellMul: 1,
       anim: this.rand() * 10, dead: false,
@@ -294,8 +361,9 @@ export class Game {
   }
 
   // Position on the lane plus a sideways offset, blended smoothly around corners.
+  route(e) { return e.air ? this.map.flights[e.pi] : this.map.paths[e.pi]; }
   placeEnemy(e) {
-    const SEG = this.map.paths[e.pi].seg;
+    const SEG = this.route(e).seg;
     while (e.si < SEG.length - 1 && e.d > SEG[e.si].start + SEG[e.si].len) e.si++;
     const s = SEG[e.si];
     const k = Math.min(Math.max(e.d - s.start, 0), s.len);
@@ -319,6 +387,7 @@ export class Game {
     if (e.dead) return;
     let d = pierce ? amt : Math.max(amt * 0.2, amt - e.armor);
     if (e.brittleT > 0) d *= 1 + e.brittle;
+    if (e.shielded) d *= 0.5;
     e.hp -= d; e.hit = 0.06;
     if (src) src.dmgDone += d;
     if (e.hp <= 0) this.kill(e, src);
@@ -327,6 +396,7 @@ export class Game {
   kill(e, src) {
     e.dead = true;
     this.credits += e.reward; this.kills++;
+    if (!this.demo) this.energy = Math.min(MAX_ENERGY, this.energy + e.reward * ENERGY_PER_REWARD);
     if (src) src.kills++;
     this.emit({ e: 'death', type: e.type, x: e.x, z: e.z, reward: e.reward });
     const a = ALIENS[e.type];
@@ -335,7 +405,8 @@ export class Game {
   }
 
   explode(x, z, r, dmg, src, pierce, kind) {
-    for (const e of this.grid.query(x, z, r, this._q2)) this.damage(e, dmg, pierce, src);
+    const groundOnly = kind === 'mortar' || kind === 'bomblet' || kind === 'singularity';
+    for (const e of this.grid.query(x, z, r, this._q2)) if (!(groundOnly && e.air)) this.damage(e, dmg, pierce, src);
     this.emit({ e: 'boom', x, z, r, kind });
   }
 
@@ -381,13 +452,14 @@ export class Game {
 
   fire(t) {
     const s = t.s, list = this.grid.query(t.x, t.z, s.range, this._q);
+    if (!TOWERS[t.type].air) compact(list, e => !e.air);
     if (!list.length) return false;
     const aim = e => { t.yaw = Math.atan2(e.z - t.z, e.x - t.x); };
 
     if (s.kind === 'bullet') {
       const e = s.spread > 1 ? list[(this.rand() * list.length) | 0] : first(list);
       aim(e); this.damage(e, s.dmg, false, t);
-      this.emit({ e: 'bullet', tid: t.id, x: e.x, z: e.z, r: ALIENS[e.type].r });
+      this.emit({ e: 'bullet', tid: t.id, x: e.x, z: e.z, r: ALIENS[e.type].r, air: e.air });
     } else if (s.kind === 'rail') {
       const tg = first(list); aim(tg);
       const ux = Math.cos(t.yaw), uz = Math.sin(t.yaw);
@@ -402,7 +474,7 @@ export class Game {
       const tg = first(list);
       const dist = Math.hypot(tg.x - t.x, tg.z - t.z), dur = 0.6 + dist * 0.12;
       const sp = tg.speed * (tg.freezeT > 0 ? 0 : tg.slowT > 0 ? 1 - tg.slowAmt : 1);
-      const path = this.map.paths[tg.pi];
+      const path = this.route(tg);
       const p = posAt(path, Math.min(tg.d + sp * dur, path.len - 0.01), this._p);
       aim(p);
       this.projectiles.push({ k: s.well ? 'void' : 'shell', sx: t.x, sz: t.z, x: t.x, y: 0.6, z: t.z, tx: p.x, tz: p.z,
@@ -479,16 +551,86 @@ export class Game {
     this.damage(tg, s.dps * mult * dt, true, t);
   }
 
-  // ----- Waves -----
-  launch() {
-    if (this.over || this.spawning) return false;
-    if (this.waveActive) {
-      const b = 10 + this.wave * 3;
-      this.credits += b;
-      this.emit({ e: 'early', amount: b });
+  // ----- Sunlance: player-aimed, map-wide beam -----
+  beamReady(t) { return t && t.s.kind === 'beam' && t.busy <= 0 && t.cd <= 0; }
+  fireBeam(t, angle) {
+    if (!this.beamReady(t) || this.over) return false;
+    const s = t.s, n = s.beams || 1, lines = [];
+    for (let i = 0; i < n; i++) {
+      const a = angle + (n > 1 ? (i - (n - 1) / 2) * s.spread : 0);
+      const ux = Math.cos(a), uz = Math.sin(a);
+      // Run until the beam leaves the map (plus a margin)
+      let L = 60;
+      const m = this.map;
+      if (ux > 1e-6) L = Math.min(L, (m.cols + 1 - t.x) / ux); else if (ux < -1e-6) L = Math.min(L, (-1 - t.x) / ux);
+      if (uz > 1e-6) L = Math.min(L, (m.rows + 1 - t.z) / uz); else if (uz < -1e-6) L = Math.min(L, (-1 - t.z) / uz);
+      const x2 = t.x + ux * L, z2 = t.z + uz * L;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const px = e.x - t.x, pz = e.z - t.z, along = px * ux + pz * uz;
+        if (along < 0 || along > L) continue;
+        if (Math.abs(px * uz - pz * ux) <= s.width + ALIENS[e.type].r * 0.5) this.damage(e, s.dmg, true, t);
+      }
+      if (s.burn) this.burns.push({ x1: t.x, z1: t.z, x2, z2, w: s.width, dps: s.burn, t: s.burnTime, max: s.burnTime, src: t });
+      lines.push([t.x, t.z, x2, z2]);
     }
+    t.yaw = angle; t.aim = angle; t.fireT = this.time; t.cd = s.rate;
+    this.emit({ e: 'beam', tid: t.id, lines, width: s.width, scorch: !!s.burn });
+    return true;
+  }
+
+  // ----- Powers -----
+  powerHp() { return hpMult(Math.max(1, this.wave)) * this.map.hpScale * this.rules.hpMul; }
+  canCast(id) { const P = POWERS[id]; return !!P && !this.over && this.energy >= P.cost && !(this.powerCd[id] > 0); }
+  castPower(id, x, z) {
+    if (!this.canCast(id)) return false;
+    const P = POWERS[id], k = this.powerHp();
+    this.energy -= P.cost; this.powerCd[id] = P.cd;
+    if (id === 'meteor') {
+      for (let i = 0; i < 14; i++) {
+        const a = this.rand() * Math.PI * 2, r = Math.sqrt(this.rand()) * P.radius;
+        const tx = x + Math.cos(a) * r, tz = z + Math.sin(a) * r;
+        this.projectiles.push({ k: 'meteor', sx: tx - 3 + this.rand(), sy: 13, sz: tz - 5, x: tx, y: 13, z: tz, tx, tz,
+          t: 0, dur: 0.7, delay: i * 0.13 + this.rand() * 0.1, dmg: 45 * k, splash: 0.75, src: null });
+      }
+    } else if (id === 'orbital') {
+      this.strikes.push({ x, z, r: P.radius, t: 1.2, dmg: 1200 * k });
+      this.emit({ e: 'orbitalCharge', x, z, r: P.radius, t: 1.2 });
+    } else if (id === 'stasis') {
+      for (const e of this.grid.query(x, z, P.radius, this._q2)) {
+        if (ALIENS[e.type].boss) { e.slowT = 4; e.slowAmt = Math.max(e.slowAmt, 0.6); } else e.freezeT = 4;
+      }
+      this.emit({ e: 'stasis', x, z, r: P.radius });
+    } else if (id === 'overdrive') {
+      this.overdriveT = 8;
+      this.emit({ e: 'overdrive' });
+    } else if (id === 'repair') {
+      const before = this.lives;
+      this.lives = Math.min(this.maxLives, this.lives + 20);
+      this.emit({ e: 'repair', amount: this.lives - before });
+    }
+    this.emit({ e: 'power', id, x, z });
+    return true;
+  }
+
+  // ----- Waves -----
+  earlyBonus() {
+    if (!this.waveActive && this.nextIn === null) return 0;
+    const frac = this.nextIn !== null && this.nextMax ? this.nextIn / this.nextMax : 1;
+    return Math.round((8 + this.wave * 3) * frac);
+  }
+  launch(auto = false) {
+    if (this.over || this.spawning) return false;
+    if (!auto && this.wave > 0) {
+      const b = this.earlyBonus();
+      if (b > 0) { this.credits += b; this.emit({ e: 'early', amount: b }); }
+    }
+    this.nextIn = null;
     this.wave++;
-    this.groups = buildWave(this.wave); this.gi = 0; this.gCount = 0; this.gTimer = 0.2;
+    this.groups = buildWave(this.wave, this.rules);
+    const air = this.map.airMul ?? 1;   // some maps get fewer flyers
+    if (air !== 1) for (const g of this.groups) if (ALIENS[g.type].air) { g.n = Math.max(1, Math.round(g.n * air)); }
+    this.gi = 0; this.gCount = 0; this.gTimer = 0.2;
     this.waveActive = true;
     this.emit({ e: 'waveStart', wave: this.wave, boss: this.wave % 10 === 0, swarm: this.wave % 5 === 3 });
     return true;
@@ -514,10 +656,34 @@ export class Game {
     }
     if (this.pending.length) { for (const e of this.pending) this.enemies.push(e); this.pending.length = 0; }
 
+    // Wardens shield the aliens around them
+    for (const e of this.enemies) e.shielded = false;
+    for (const e of this.enemies) {
+      const aura = ALIENS[e.type].aura;
+      if (!aura || e.dead) continue;
+      for (const o of this.grid.query(e.x, e.z, aura, this._q2)) if (o !== e && o.type !== 'warden') o.shielded = true;
+    }
+
+    // Wave timer: once a wave has fully arrived, the next one launches on its own
+    if (this.rules.autoWaves && !this.demo && this.wave > 0 && !this.spawning && !(this.rules.winWave && this.wave >= this.rules.winWave)) {
+      if (this.nextIn === null) { this.nextMax = Math.max(10, 30 - this.wave * 0.75); this.nextIn = this.nextMax; }
+      this.nextIn -= dt;
+      if (this.nextIn <= 0) this.launch(true);
+    }
+
+    // Power cooldowns and timed effects
+    for (const k in this.powerCd) if (this.powerCd[k] > 0) this.powerCd[k] -= dt;
+    if (this.overdriveT > 0) this.overdriveT -= dt;
+    for (const st of this.strikes) {
+      st.t -= dt;
+      if (st.t <= 0) { st.done = true; this.explode(st.x, st.z, st.r, st.dmg, null, true, 'orbital'); }
+    }
+    compact(this.strikes, st => !st.done);
+
     // Gravity wells hold aliens in place
     for (const w of this.wells) {
       w.t -= dt;
-      for (const e of this.grid.query(w.x, w.z, w.r, this._q2)) e.wellMul = ALIENS[e.type].boss ? 0.5 : 0.08;
+      for (const e of this.grid.query(w.x, w.z, w.r, this._q2)) if (!e.air) e.wellMul = ALIENS[e.type].boss ? 0.5 : 0.08;
       if (w.t <= 0) { w.done = true; this.explode(w.x, w.z, w.splash, w.dmg, w.src, true, 'singularity'); }
     }
     compact(this.wells, w => !w.done);
@@ -533,7 +699,7 @@ export class Game {
       mul *= e.wellMul; e.wellMul = 1;
       e.d += e.speed * mul * dt;
       e.anim += dt * (0.3 + mul) * e.speed * 4;
-      if (e.d >= this.map.paths[e.pi].len) {
+      if (e.d >= this.route(e).len) {
         e.dead = true; e.leaked = true;
         if (!this.demo) {
           this.lives = Math.max(0, this.lives - e.dmg);
@@ -554,8 +720,14 @@ export class Game {
         if (t.busy <= 0) { t.busy = 0; this.emit({ e: 'upgraded', tid: t.id }); }
         continue;
       }
-      if (t.s.kind === 'lance') { this.lance(t, dt); continue; }
-      t.cd -= dt;
+      const rateMul = this.overdriveT > 0 ? 2 : 1;
+      if (t.s.kind === 'lance') { this.lance(t, dt * rateMul); continue; }
+      if (t.s.kind === 'beam') {
+        if (t.cd > 0) t.cd -= dt * rateMul;
+        if (t.cd <= 0 && t.auto && t.aim !== undefined && this.enemies.length) this.fireBeam(t, t.aim);
+        continue;
+      }
+      t.cd -= dt * rateMul;
       let guard = 0;
       while (t.cd <= 0 && guard++ < 6) {
         if (!this.fire(t)) { t.cd = 0; break; }
@@ -563,9 +735,29 @@ export class Game {
       }
     }
 
+    // Burning ground left by Scorch Line beams
+    for (const b of this.burns) {
+      b.t -= dt;
+      if (b.t <= 0) { b.done = true; continue; }
+      const dx = b.x2 - b.x1, dz = b.z2 - b.z1, L2 = dx * dx + dz * dz || 1;
+      for (const e of this.enemies) {
+        if (e.dead || e.air) continue;
+        const k = Math.max(0, Math.min(1, ((e.x - b.x1) * dx + (e.z - b.z1) * dz) / L2));
+        const ex = b.x1 + dx * k - e.x, ez = b.z1 + dz * k - e.z;
+        if (ex * ex + ez * ez <= b.w * b.w) this.damage(e, b.dps * dt, true, b.src);
+      }
+    }
+    compact(this.burns, b => !b.done);
+
     // Projectiles
     for (const p of this.projectiles) {
-      if (p.k === 'shell' || p.k === 'void' || p.k === 'bomblet') {
+      if (p.k === 'meteor') {
+        if (p.delay > 0) { p.delay -= dt; continue; }
+        p.t += dt;
+        const k = Math.min(1, p.t / p.dur);
+        p.x = p.sx + (p.tx - p.sx) * k; p.y = p.sy * (1 - k) + 0.1; p.z = p.sz + (p.tz - p.sz) * k;
+        if (k >= 1) { p.done = true; this.explode(p.tx, p.tz, p.splash, p.dmg, null, true, 'meteor'); }
+      } else if (p.k === 'shell' || p.k === 'void' || p.k === 'bomblet') {
         p.t += dt;
         const k = Math.min(1, p.t / p.dur);
         p.x = p.sx + (p.tx - p.sx) * k; p.z = p.sz + (p.tz - p.sz) * k;
@@ -587,11 +779,12 @@ export class Game {
       } else {
         if (p.delay > 0) { p.delay -= dt; continue; }
         if (p.tgt && !p.tgt.dead) { p.tx = p.tgt.x; p.tz = p.tgt.z; } else p.tgt = null;
-        const dx = p.tx - p.x, dy = 0.15 - p.y, dz = p.tz - p.z, L = Math.hypot(dx, dy, dz) || 1;
+        const ty = p.tgt && p.tgt.air ? 1.0 : 0.15;
+        const dx = p.tx - p.x, dy = ty - p.y, dz = p.tz - p.z, L = Math.hypot(dx, dy, dz) || 1;
         const turn = Math.min(1, (p.k === 'nuke' ? 2.2 : 5) * dt * (1 + (5 - p.life)));
         p.vx += (dx / L * p.spd - p.vx) * turn; p.vy += (dy / L * p.spd - p.vy) * turn; p.vz += (dz / L * p.spd - p.vz) * turn;
         p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.life -= dt;
-        if (L < 0.3 || p.y <= 0.05 || p.life <= 0) {
+        if (L < 0.3 || (p.y <= 0.05 && ty < 0.5) || p.life <= 0) {
           p.done = true;
           this.explode(p.x, p.z, p.splash, p.dmg, p.src, false, p.k);
         }
@@ -607,8 +800,13 @@ export class Game {
       this.waveActive = false;
       const bonus = 20 + this.wave * 4;
       this.credits += bonus;
+      if (!this.demo) this.energy = Math.min(MAX_ENERGY, this.energy + ENERGY_PER_WAVE);
       this.emit({ e: 'waveClear', wave: this.wave, bonus });
+      if (this.rules.winWave && this.wave >= this.rules.winWave && !this.demo) {
+        this.over = true; this.won = true;
+        this.emit({ e: 'victory', wave: this.wave });
+      }
     }
-    if (this.lives <= 0) { this.over = true; this.emit({ e: 'gameOver', wave: this.wave }); }
+    if (this.lives <= 0 && !this.over) { this.over = true; this.emit({ e: 'gameOver', wave: this.wave }); }
   }
 }

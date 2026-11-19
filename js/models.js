@@ -96,6 +96,29 @@ export function alienGeometries() {
     ]),
     height: 1.2,
   };
+  A.wasp = {
+    body: merge([
+      part(sphere(0.1), { x: 0.06, sx: 1.3, sy: 0.8 }),
+      part(sphere(0.08), { x: -0.12, sx: 1.6, sy: 0.75 }),
+      part(cone(0.035, 0.14, 5), { x: -0.3, rz: Math.PI / 2 }),
+      part(box(0.18, 0.012, 0.42), { x: 0.02, y: 0.06, rx: 0.25, sz: 1 }),
+      part(box(0.14, 0.012, 0.34), { x: -0.08, y: 0.06, rx: -0.25 }),
+    ]),
+    eyes: merge([part(sphere(0.035, 6, 5), { x: 0.17, y: 0.03, z: 0.05 }), part(sphere(0.035, 6, 5), { x: 0.17, y: 0.03, z: -0.05 })]),
+    height: 0.2,
+  };
+  A.warden = {
+    body: merge([
+      part(cyl(0.18, 0.24, 0.32, 8), { y: 0.22 }),
+      part(sphere(0.15, 10, 8), { y: 0.42, sy: 0.8 }),
+      part(cyl(0.02, 0.02, 0.4, 5), { x: -0.05, y: 0.6 }),
+      part(sphere(0.05, 8, 6), { x: -0.05, y: 0.82 }),
+      part(box(0.08, 0.26, 0.36), { x: 0.2, y: 0.24 }),
+      ...legs(2, 0.18, 0.18, 0.06, 0.2, 0.04),
+    ]),
+    eyes: merge([part(sphere(0.045, 8, 6), { x: 0.13, y: 0.45 }), part(sphere(0.06, 8, 6), { x: -0.05, y: 0.82 })]),
+    height: 0.85,
+  };
   for (const k in A) { A[k].body.computeVertexNormals(); A[k].eyes.computeVertexNormals(); }
   return A;
 }
@@ -273,6 +296,31 @@ export function buildTower(type, lvl, branch, color) {
       }
       muzzle.position.set(0.3, 0.45, 0);
     }
+  }
+  if (type === 'sunlance') {
+    const prism = branch === 'prism', scorch = branch === 'scorch';
+    head.add(mesh(cyl(0.2, 0.26, 0.24, 10), MAT.mid, { y: 0.12 }));
+    const yoke = new THREE.Group(); yoke.position.y = 0.36; head.add(yoke);
+    for (const z of [-0.17, 0.17]) yoke.add(mesh(box(0.16, 0.22, 0.05), MAT.dark, { z }));
+    const L = mk2 ? 0.95 : lvl >= 3 ? 0.85 : 0.75;
+    yoke.add(mesh(cyl(0.1, 0.13, L, 14), MAT.light, { x: L / 2 - 0.12, rz: Math.PI / 2 }));
+    const rings = lvl >= 3 ? 4 : lvl >= 2 ? 3 : 2;
+    for (let i = 0; i < rings; i++) yoke.add(mesh(new THREE.TorusGeometry(0.135, 0.022, 6, 16), glowMat(scorch ? '#ff7a3d' : '#ffe066', 2.2), { x: 0.05 + i * (L - 0.25) / rings, ry: Math.PI / 2 }));
+    // Rear capacitor: glows brighter as the beam charges
+    yoke.add(mesh(sphere(0.15, 14, 10), MAT.dark, { x: -0.2 }));
+    const core = mesh(sphere(0.11, 12, 9), glowMat(scorch ? '#ff9a5c' : '#fff3b0', 3.2), { x: -0.2 });
+    core.castShadow = false; yoke.add(core); r.core = core;
+    const tipX = L - 0.1;
+    if (prism) {
+      const p = mesh(new THREE.OctahedronGeometry(mk2 ? 0.13 : 0.11), new THREE.MeshStandardMaterial({ color: 0xfff6d0, emissive: 0xffe066, emissiveIntensity: 1.4, roughness: 0.1, transparent: true, opacity: 0.9 }), { x: tipX + 0.08, sx: 1.4 });
+      yoke.add(p); r.float = null;
+      for (const z of (mk2 ? [-0.14, -0.07, 0.07, 0.14] : [-0.1, 0.1])) yoke.add(mesh(cyl(0.02, 0.02, 0.2, 6), MAT.light, { x: tipX - 0.02, z, rz: Math.PI / 2 }));
+    } else {
+      yoke.add(mesh(cyl(0.09, 0.09, 0.03, 16), glowMat(scorch ? '#ff5c2a' : '#fff3b0', 3), { x: tipX + 0.02, rz: Math.PI / 2 }));
+    }
+    if (scorch) for (let i = 0; i < (mk2 ? 4 : 3); i++) for (const z of [-1, 1])
+      yoke.add(mesh(box(0.05, 0.16, 0.08), glowMat('#ff7a3d', 1.4), { x: 0.05 + i * 0.13, z: z * 0.19 }));
+    muzzle.position.set(tipX + 0.1, 0.36, 0);
   }
   head.add(muzzle);
   // Muzzle flash sprite (shown for a moment after firing)

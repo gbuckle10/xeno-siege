@@ -142,6 +142,57 @@ button.big{font-size:16px;padding:14px}
 .card p{margin:7px 0;color:#b5c8e6;line-height:1.4}
 .card button{margin-top:12px;width:auto;padding:11px 28px}
 /* phones held upright: board on top, panel below */
+
+/* ---------- Power bar ---------- */
+#powerBar{position:absolute;left:10px;bottom:10px;display:flex;flex-direction:column;gap:6px}
+body.home #powerBar,body.editor #powerBar{display:none}
+.energy{display:flex;align-items:center;gap:8px;background:rgba(10,16,32,.86);border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px;color:#d6c6ff;width:fit-content;font-weight:700;letter-spacing:.05em}
+.ebar{width:150px;height:8px;background:#1a1430;border-radius:4px;overflow:hidden}
+#energyFill{height:100%;width:0;background:linear-gradient(90deg,#7a4dff,#d9b8ff);transition:width .2s}
+.powers{display:flex;gap:7px}
+.pw{position:relative;width:54px;height:54px;border-radius:12px;border:1px solid var(--line);background:rgba(10,16,32,.9);color:var(--text);cursor:pointer;font-size:22px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;padding:0;font-family:inherit;overflow:hidden}
+.pw small{font-size:10.5px;color:#d6c6ff;margin-top:4px;font-weight:700}
+.pw .cdv{position:absolute;inset:0;background:conic-gradient(rgba(0,0,0,.7) calc(var(--p,0)*1turn),transparent 0);pointer-events:none}
+.pw .k{position:absolute;top:2px;right:5px;font-size:9.5px;color:var(--dim);text-transform:uppercase}
+.pw.off{opacity:.5}
+.pw.ready{border-color:var(--pc)}
+.pw.active{border-color:var(--pc);box-shadow:0 0 0 1px var(--pc) inset,0 0 16px var(--pc)}
+.pw span.ic{color:var(--pc);text-shadow:0 0 10px var(--pc)}
+.charge{height:8px;background:#2a2410;border-radius:4px;overflow:hidden;margin:6px 0 3px}
+.charge div{height:100%;background:linear-gradient(90deg,#b98a1a,#ffe066)}
+/* ---------- Editor ---------- */
+#editorPanel{display:none}
+body.editor #editorPanel{display:flex}
+body.editor #gamePanel{display:none}
+.seg{display:flex;gap:5px}.seg .b{padding:7px 4px;font-size:12.5px}
+.b.on{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.rule{display:grid;grid-template-columns:92px 1fr auto;align-items:center;gap:8px;font-size:13px;color:#b5c8e6}
+.rule input[type=range]{width:100%;accent-color:#4df3c9}
+.rule b{min-width:40px;text-align:right;color:var(--text);font-size:12.5px}
+.rule select,.rule input:not([type]){grid-column:2 / span 2;background:#0d1830;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px;font-family:inherit;font-size:13.5px;min-width:0}
+.edMsg{background:#0d1830;border:1px solid #2a4170;border-radius:8px;padding:8px;font-size:13px;line-height:1.35;min-height:40px}
+.edLanes{font-size:12.5px;color:#a9bddd;line-height:1.4}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chipBtn{font-family:inherit;font-size:12px;font-weight:700;padding:4px 9px;border-radius:14px;border:1px solid var(--line);background:#0d1830;color:var(--dim);cursor:pointer;text-decoration:line-through}
+.chipBtn.on{color:var(--c);border-color:var(--c);text-decoration:none}
+.edPrev{font-size:12px;color:#a9bddd;line-height:1.45;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px}
+.edPrev b{color:var(--text);font-weight:600}
+#edCode,#importText{width:100%;height:64px;background:#060b16;color:#9fb6d8;border:1px solid var(--line);border-radius:6px;font-size:11px;font-family:monospace;resize:vertical}
+.hlabel{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.12em;margin:4px 0 -4px}
+.d-Custom{color:#c792ff}
+.mapCard .acts{display:flex;gap:5px;margin-top:5px}
+.mapCard .acts span{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:6px;border:1px solid var(--line);color:var(--text);background:#0d1830}
+.mapCard .acts span:hover{border-color:var(--accent)}
+.mapCard.create{justify-content:center;min-height:52px;color:var(--accent);font-weight:700;font-size:15px;border-style:dashed}
+@media (orientation:landscape) and (max-height:560px){
+  .pw{width:42px;height:42px;font-size:17px;border-radius:10px}.pw small{font-size:9px;margin-top:2px}.pw .k{display:none}
+  .ebar{width:100px}.energy{font-size:10.5px;padding:2px 7px}
+  .rule{grid-template-columns:78px 1fr auto;font-size:12px}
+}
+@media (max-aspect-ratio:4/5){
+  .pw{width:44px;height:44px;font-size:18px}.pw .k{display:none}
+}
 @media (max-aspect-ratio:4/5){
   .app{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto;gap:6px;padding:max(6px,env(safe-area-inset-top)) 6px max(6px,env(safe-area-inset-bottom))}
   .panel{max-height:46vh;max-height:46dvh;padding:8px;gap:7px}
@@ -176,6 +227,11 @@ button.big{font-size:16px;padding:14px}
     <div class="logo">XENO<br>SIEGE</div>
     <div class="tag">Hold the lane · Burn the swarm</div>
     <div class="maps" id="mapList"></div>
+    <div class="hlabel">Your maps</div>
+    <div class="maps" id="customList"></div>
+    <div class="row"><button class="b" id="importBtn">Import map code</button></div>
+    <div class="how hidden" id="importBox"><textarea id="importText" placeholder="Paste a map code (it starts with XS1:)"></textarea>
+      <div class="row" style="margin-top:6px"><button class="b primary" id="importGo">IMPORT</button></div><div id="importMsg" class="muted" style="margin-top:4px"></div></div>
     <button class="b primary big" id="playBtn">PLAY</button>
     <div class="row"><button class="b" id="howBtn">How to play</button><button class="b" id="gfxHome">Gfx: High</button></div>
     <button class="b" id="installBtn2">⬇ Install as app</button>
@@ -184,12 +240,16 @@ button.big{font-size:16px;padding:14px}
       <ul>
         <li><b>Build:</b> pick a tower, then tap an empty pad beside a lane.</li>
         <li><b>Upgrade:</b> tap a tower. Level 2, then choose one of two specializations, then Mk II. Towers go offline for a few seconds while upgrading.</li>
-        <li><b>Waves:</b> press Launch. Calling a wave early pays a bonus.</li>
+        <li><b>Waves:</b> press Launch to start. After that a timer brings each next wave automatically. Call it early for a bonus.</li>
+        <li><b>Know your enemy:</b> Wasps fly straight at your base (Mortars and Cryo can't hit them). Wardens shield the aliens around them. Armor grows as waves go on.</li>
         <li><b>Camera:</b> drag to pan, scroll or pinch to zoom.</li>
-        <li><b>Tip:</b> Shellbacks are armored. Railguns, Arc Coils and Ion Lances ignore armor.</li>
+        <li><b>Sunlance:</b> tap it, then tap the map to fire a beam across the whole map in that direction.</li>
+        <li><b>Powers:</b> kills charge your Energy. Spend it on meteor showers, orbital strikes and more (keys Z X C V B).</li>
+        <li><b>Your maps:</b> build your own map and wave rules with the editor, and share them with a code.</li>
+        <li><b>Tip:</b> Shellbacks are armored. Railguns, Arc Coils, Ion Lances and the Sunlance ignore armor.</li>
       </ul>
     </div>
-    <div class="credit">v3 · made with Claude</div>
+    <div class="credit">v4 · made with Claude</div>
   </div>
 </div>
 <div class="app">
@@ -199,6 +259,10 @@ button.big{font-size:16px;padding:14px}
     <div id="banner"></div>
     <div id="flash"></div>
     <div id="pausedTag">PAUSED</div>
+    <div id="powerBar">
+      <div class="energy">ENERGY <div class="ebar"><div id="energyFill"></div></div> <span id="energyText">0</span></div>
+      <div class="powers" id="powerBtns"></div>
+    </div>
     <div class="camctl">
       <button id="zoomIn" title="Zoom in">+</button>
       <button id="zoomOut" title="Zoom out">−</button>
@@ -206,7 +270,8 @@ button.big{font-size:16px;padding:14px}
     </div>
     <div id="overlay" class="overlay hidden"><div class="card" id="card"></div></div>
   </div>
-  <aside class="panel">
+  <aside class="panel" id="editorPanel"></aside>
+  <aside class="panel" id="gamePanel">
     <div class="row" style="align-items:center"><h1 style="flex:1">XENO SIEGE</h1><button class="b" id="menuBtn" style="flex:none;padding:6px 10px">☰ Menu</button></div>
     <div class="sub" id="mapName">Rift Valley</div>
     <div class="ptop">
@@ -227,7 +292,7 @@ button.big{font-size:16px;padding:14px}
       <button class="b" id="quality" title="Graphics quality">Gfx</button>
     </div>
     <button class="b" id="installBtn">⬇ Install as app</button>
-    <div class="hint">1–5 build · Space launch · U upgrade · Esc cancel · P pause · drag/arrows pan · scroll zoom · Shift+click builds several</div>
+    <div class="hint">1–6 build · Z–B powers · F Sunlance · Space launch · U upgrade · Esc cancel · P pause · drag/arrows pan · scroll zoom · Shift+click builds several</div>
   </aside>
 </div>
 <script type="module" src="js/main.js"></script>

@@ -1,11 +1,12 @@
 // 3D renderer for Xeno Siege (Three.js). Reads the Game state each frame and turns events into effects.
 import * as THREE from '../vendor/three.bundle.js';
-import { TOWERS, ALIENS, START_LIVES } from './game.js';
+import { TOWERS, ALIENS, POWERS } from './game.js';
 import { alienGeometries, buildTower, glowMat } from './models.js';
 
 const TYPES = Object.keys(ALIENS);
-const MAXN = { skitter: 3500, grunt: 900, shell: 400, brood: 300, queen: 16 };
-const EYE = { skitter: '#f4ff6a', grunt: '#ff3355', shell: '#ffe1f5', brood: '#ff9f43', queen: '#ff2244' };
+const MAXN = { skitter: 3500, grunt: 900, shell: 400, brood: 300, queen: 16, wasp: 800, warden: 200 };
+const EYE = { skitter: '#f4ff6a', grunt: '#ff3355', shell: '#ffe1f5', brood: '#ff9f43', queen: '#ff2244', wasp: '#fff27a', warden: '#7cc7ff' };
+const FLY_Y = 1.0;
 const PAD_Y = 0.14; // towers stand on raised pads; the lane is a trench at y = 0
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -165,6 +166,11 @@ export class View {
     this.sparks = new Particles(this.scene, 9000, 0.11, this.tex, 6, 0.93);
     this.glows = new Particles(this.scene, 1500, 0.9, this.tex, -0.4, 0.9);
     this.rings = new Rings(this.scene, 300);
+    this.preview = new Beams(this.scene, 200);   // aim lines / editor lanes, rebuilt every frame
+    const burnMat = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.burnMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), burnMat, 60);
+    this.burnMesh.setColorAt(0, _c.set(0)); this.burnMesh.frustumCulled = false; this.burnMesh.count = 0;
+    this.scene.add(this.burnMesh);
     this.buildProjectiles();
     this.towerObjs = new Map();
     this.wellObjs = [];
@@ -204,14 +210,15 @@ export class View {
   }
 
   // Build (or rebuild) everything that depends on the map, and clear leftover effects.
-  loadMap(map) {
+  loadMap(map, opts = {}) {
+    const keepCam = opts.keepCamera && this.map && this.map.cols === map.cols && this.map.rows === map.rows;
     if (this.world) {
       this.scene.remove(this.world);
       this.world.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.map) o.material.map.dispose(); });
     }
     for (const [, o] of this.towerObjs) this.scene.remove(o.obj.group);
     this.towerObjs.clear();
-    this.beams.list.length = 0; this.sparks.n = 0; this.glows.n = 0; this.rings.list.length = 0;
+    this.beams.list.length = 0; this.sparks.n = 0; this.glows.n = 0; this.rings.list.length = 0; this.burnMesh.count = 0;
     for (const w of this.wellObjs) w.visible = false;
     this.shake = 0;
 
@@ -276,7 +283,7 @@ export class View {
         strips.push(geo);
       }
     }
-    W.add(new THREE.Mesh(THREE.mergeGeometries(strips), glowMat('#4df3c9', 0.85)));
+    if (strips.length) W.add(new THREE.Mesh(THREE.mergeGeometries(strips), glowMat('#4df3c9', 0.85)));
 
     // Scenery outside the map
     const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x1a1f33, roughness: 0.9, metalness: 0.1, flatShading: true }), 140);
@@ -300,7 +307,8 @@ export class View {
     // A rift portal where each lane starts
     this.portals = [];
     for (const path of map.paths) {
-      const a = path.way[0], b = path.way[1], L = Math.hypot(b.x - a.x, b.z - a.z), dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
+      const a = path.way[0], b = path.way[1] || { x: Math.min(Math.max(a.x, 0.5), COLS - 0.5), z: Math.min(Math.max(a.z, 0.5), ROWS - 0.5) };
+      const L = Math.hypot(b.x - a.x, b.z - a.z) || 1, dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
       const portal = new THREE.Group();
       const px0 = a.x + dx * 0.35, pz0 = a.z + dz * 0.35;
       portal.position.set(px0, 0.62, pz0);
@@ -314,6 +322,8 @@ export class View {
     }
 
     // Player base
+    this.shield = null; this.baseCore = null;
+    if (map.base) {
     const base = new THREE.Group(); base.position.set(map.base.x, 0, map.base.z);
     const bm = new THREE.MeshStandardMaterial({ color: 0x23365c, metalness: 0.75, roughness: 0.3 });
     const mk = (geo, mat, y) => { const m = new THREE.Mesh(geo, mat); m.position.y = y; m.castShadow = m.receiveShadow = true; base.add(m); return m; };
@@ -326,10 +336,11 @@ export class View {
       new THREE.MeshBasicMaterial({ color: 0x4df3c9, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     base.add(this.shield);
     W.add(base);
+    }
 
     if (this.shadowsOn !== undefined) this.setQuality(this.quality);
     this.cam.fit = this.fitDistance();
-    this.resetCamera();
+    if (!keepCam) this.resetCamera();
   }
 
   buildAliens() {
@@ -353,6 +364,12 @@ export class View {
     this.barFg = new THREE.InstancedMesh(bar, new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, depthWrite: false }), 1500);
     this.barFg.setColorAt(0, _c.set(1, 1, 1));
     for (const m of [this.barBg, this.barFg]) { m.frustumCulled = false; m.count = 0; m.renderOrder = 5; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.scene.add(m); }
+    // Warden shield bubbles + flyer shadows
+    this.bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x7cc7ff, transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }), 200);
+    this.shadows = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 12).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }), 800);
+    for (const m of [this.bubbles, this.shadows]) { m.frustumCulled = false; m.count = 0; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.scene.add(m); }
   }
 
   buildProjectiles() {
@@ -367,6 +384,7 @@ export class View {
       void: { s: 0.13, col: new THREE.Color('#d9a8ff').multiplyScalar(3), trail: '#c792ff' },
       missile: { s: 0.055, col: new THREE.Color('#ffffff').multiplyScalar(3), trail: '#ff6a4d' },
       nuke: { s: 0.16, col: new THREE.Color('#ffe59a').multiplyScalar(3), trail: '#ffd166' },
+      meteor: { s: 0.17, col: new THREE.Color('#ffb070').multiplyScalar(3), trail: '#ff6a2a' },
     };
   }
 
@@ -380,6 +398,7 @@ export class View {
       this.scene.add(g); return g;
     };
     this.rangeRing = mkRing();
+    this.nextRings = [mkRing(), mkRing()];   // upgrade range previews
     this.selRing = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.56, 6).rotateX(-Math.PI / 2), glowMat('#4df3c9', 2));
     this.selRing.visible = false; this.scene.add(this.selRing);
     const sq = new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.96, 0.96).rotateX(-Math.PI / 2));
@@ -518,7 +537,14 @@ export class View {
       const sinceFire = g.time - t.fireT;
       if (o.obj.spin) o.obj.spin.rotation.x += dt * (sinceFire < 0.3 ? 40 : 3);
       if (o.obj.float) { o.obj.float.rotation.y += dt * 1.2; o.obj.float.position.y = o.obj.floatY + Math.sin(this.time * 2 + t.id) * 0.04; }
-      o.obj.flash.visible = t.s.kind !== 'cryo' && t.s.kind !== 'mortar' && sinceFire < 0.045;
+      o.obj.flash.visible = t.s.kind !== 'cryo' && t.s.kind !== 'mortar' && t.s.kind !== 'beam' && sinceFire < 0.045;
+      if (o.obj.core) {
+        const charge = t.busy > 0 ? 0 : 1 - Math.max(0, t.cd) / t.s.rate;
+        const ready = charge >= 1;
+        o.obj.core.scale.setScalar(ready ? 1.1 + Math.sin(this.time * 6) * 0.15 : 0.3 + charge * 0.6);
+        if (ready && Math.random() < 0.15) { this.muzzle(t.id, _v2); this.sparks.spawn(_v2.x, _v2.y, _v2.z, (Math.random() - 0.5) * 0.6, 0.5, (Math.random() - 0.5) * 0.6, 0.4, '#ffe066', 2); }
+      }
+      if (this.game.overdriveT > 0 && Math.random() < 0.08) this.sparks.spawn(t.x + (Math.random() - 0.5) * 0.6, 0.3, t.z + (Math.random() - 0.5) * 0.6, 0, 1.6, 0, 0.5, '#c792ff', 2);
       if (t.busy > 0) {
         const p = 1 - t.busy / t.busyMax;
         o.obj.busyRing.visible = true;
@@ -532,16 +558,18 @@ export class View {
   syncAliens() {
     const g = this.game, counts = {};
     for (const t of TYPES) counts[t] = 0;
-    let bars = 0;
+    let bars = 0, nbub = 0, nsh = 0;
     const camQ = this.camera.quaternion;
     for (const e of g.enemies) {
       const A = this.aliens[e.type], i = counts[e.type];
       if (i >= MAXN[e.type]) continue;
       counts[e.type]++;
-      const bob = e.freezeT > 0 ? 0 : Math.abs(Math.sin(e.anim)) * (e.type === 'queen' ? 0.03 : 0.04);
-      const sq = e.freezeT > 0 ? 1 : 1 + Math.sin(e.anim * 2) * 0.06;
+      const bob = e.freezeT > 0 ? 0 : e.air ? FLY_Y + Math.sin(e.anim * 0.7) * 0.08 : Math.abs(Math.sin(e.anim)) * (e.type === 'queen' ? 0.03 : 0.04);
+      const sq = e.freezeT > 0 ? 1 : e.air ? 1 : 1 + Math.sin(e.anim * 2) * 0.06;
       _q.setFromAxisAngle(UP, Math.atan2(-e.dz, e.dx));
-      _m.compose(_v.set(e.x, bob, e.z), _q, _s.set(1, sq, 1));
+      _m.compose(_v.set(e.x, e.air && e.freezeT > 0 ? FLY_Y : bob, e.z), _q, _s.set(1, sq, e.air ? 0.75 + Math.abs(Math.sin(e.anim * 5)) * 0.35 : 1));
+      if (e.air && nsh < 800) { _m.makeScale(0.16, 1, 0.16).setPosition(e.x, 0.02, e.z); this.shadows.setMatrixAt(nsh++, _m); }
+      if (ALIENS[e.type].aura && nbub < 200) { const r = ALIENS[e.type].aura; _m.makeScale(r, r * 0.55, r).setPosition(e.x, 0, e.z); this.bubbles.setMatrixAt(nbub++, _m); }
       A.body.setMatrixAt(i, _m); A.eyes.setMatrixAt(i, _m);
       if (e.hit > 0) _c.setRGB(5, 5, 5);
       else if (e.freezeT > 0) _c.setRGB(0.6, 1.4, 3);
@@ -549,7 +577,7 @@ export class View {
       else _c.setRGB(1, 1, 1);
       A.body.setColorAt(i, _c);
       if (e.type !== 'skitter' && e.hp < e.max && bars < 1500) {
-        const w = Math.max(0.32, ALIENS[e.type].r * 1.8), f = Math.max(0, e.hp / e.max), y = this.alienH[e.type] + 0.18;
+        const w = Math.max(0.32, ALIENS[e.type].r * 1.8), f = Math.max(0, e.hp / e.max), y = this.alienH[e.type] + 0.18 + (e.air ? FLY_Y : 0);
         _m.compose(_v.set(e.x, y, e.z), camQ, _s.set(w + 0.03, 0.065, 1));
         this.barBg.setMatrixAt(bars, _m);
         _m.compose(_v.set(e.x - (1 - f) * w / 2, y, e.z + 0.001), camQ, _s.set(w * f, 0.04, 1));
@@ -565,6 +593,8 @@ export class View {
       A.body.instanceColor.needsUpdate = true;
     }
     this.barBg.count = this.barFg.count = bars;
+    this.bubbles.count = nbub; this.shadows.count = nsh;
+    this.bubbles.instanceMatrix.needsUpdate = this.shadows.instanceMatrix.needsUpdate = true;
     this.barBg.instanceMatrix.needsUpdate = this.barFg.instanceMatrix.needsUpdate = true;
     if (this.barFg.instanceColor) this.barFg.instanceColor.needsUpdate = true;
   }
@@ -577,11 +607,39 @@ export class View {
       const P = this.PROJ[p.k]; if (!P || n >= 1500) continue;
       _m.makeScale(P.s, P.s, P.s).setPosition(p.x, p.y, p.z);
       this.proj.setMatrixAt(n, _m); this.proj.setColorAt(n, P.col); n++;
-      if ((n % trailEvery) === 0) this.glows.spawn(p.x, p.y, p.z, 0, 0.1, 0, p.k === 'nuke' ? 0.6 : 0.25, P.trail, p.k === 'missile' ? 0.35 : 0.6);
+      if (p.k === 'meteor') { this.glows.spawn(p.x, p.y, p.z, 0, 0.3, 0, 0.45, P.trail, 1.2); this.sparks.spawn(p.x, p.y, p.z, (Math.random() - 0.5), 0.5, (Math.random() - 0.5), 0.3, '#ffd27a', 2); }
+      else if ((n % trailEvery) === 0) this.glows.spawn(p.x, p.y, p.z, 0, 0.1, 0, p.k === 'nuke' ? 0.6 : 0.25, P.trail, p.k === 'missile' ? 0.35 : 0.6);
     }
     this.proj.count = n;
     this.proj.instanceMatrix.needsUpdate = true;
     if (this.proj.instanceColor) this.proj.instanceColor.needsUpdate = true;
+
+    // Burning ground from Scorch Line beams
+    let nb = 0;
+    for (const b of this.game.burns) {
+      if (nb >= 60) break;
+      const dx = b.x2 - b.x1, dz = b.z2 - b.z1, L = Math.hypot(dx, dz);
+      _q.setFromAxisAngle(UP, Math.atan2(-dz, dx));
+      _m.compose(_v.set((b.x1 + b.x2) / 2, 0.03, (b.z1 + b.z2) / 2), _q, _s.set(L, 1, b.w * 2));
+      this.burnMesh.setMatrixAt(nb, _m);
+      const f = Math.min(1, b.t / b.max * 2) * (0.75 + Math.random() * 0.25);
+      this.burnMesh.setColorAt(nb, _c.setRGB(1.6 * f, 0.55 * f, 0.15 * f));
+      nb++;
+      if (Math.random() < 0.9 * dt * 60) {
+        const k = Math.random();
+        this.glows.spawn(b.x1 + dx * k + (Math.random() - 0.5) * b.w, 0.1, b.z1 + dz * k + (Math.random() - 0.5) * b.w, 0, 0.9, 0, 0.5, Math.random() < 0.5 ? '#ff7a3d' : '#ffc06a', 1.2);
+      }
+    }
+    this.burnMesh.count = nb;
+    this.burnMesh.instanceMatrix.needsUpdate = true;
+    if (this.burnMesh.instanceColor) this.burnMesh.instanceColor.needsUpdate = true;
+
+    // Orbital strikes charging up
+    for (const st of this.game.strikes) {
+      _v2.set(st.x, 16, st.z); _v3.set(st.x, 0, st.z);
+      this.beams.add(_v2, _v3, '#fff1a8', 0.02 + (1.2 - st.t) * 0.04, dt * 1.5, 2);
+      if (Math.random() < 0.5) this.sparks.spawn(st.x + (Math.random() - 0.5) * st.r * 2, 0.1, st.z + (Math.random() - 0.5) * st.r * 2, 0, 1.5, 0, 0.4, '#fff1a8', 2);
+    }
 
     // Singularity wells
     const wells = this.game.wells;
@@ -610,7 +668,7 @@ export class View {
       if (t.s.kind !== 'lance' || !t.lt || t.lt.dead || this.game.time - t.fireT > 0.1 || t.busy > 0) continue;
       const heat = t.heat / t.s.rampTime;
       this.muzzle(t.id, _v2);
-      _v3.set(t.lt.x, this.alienH[t.lt.type] * 0.5, t.lt.z);
+      _v3.set(t.lt.x, this.alienH[t.lt.type] * 0.5 + (t.lt.air ? FLY_Y : 0), t.lt.z);
       _c.set('#c792ff').lerp(new THREE.Color('#ffffff'), heat * 0.7);
       this.beams.add(_v2, _v3, _c.getHex(), 0.03 + heat * 0.05, dt * 1.6, 3);
       this.beams.add(_v2, _v3, 0xffffff, 0.012, dt * 1.6, 3);
@@ -625,7 +683,7 @@ export class View {
       switch (ev.e) {
         case 'bullet': {
           this.muzzle(ev.tid, _v2);
-          _v3.set(ev.x + (Math.random() - 0.5) * 0.1, ev.r + 0.05, ev.z + (Math.random() - 0.5) * 0.1);
+          _v3.set(ev.x + (Math.random() - 0.5) * 0.1, ev.r + 0.05 + (ev.air ? FLY_Y : 0), ev.z + (Math.random() - 0.5) * 0.1);
           this.beams.add(_v2, _v3, '#ffe9a6', 0.016, 0.06, 2.5);
           if (!busy && Math.random() < 0.35) this.sparks.burst(_v3.x, _v3.y, _v3.z, 2, '#ffd27a', 2, 0.18);
           break;
@@ -665,7 +723,21 @@ export class View {
         }
         case 'boom': {
           const { x, z, r, kind } = ev;
-          if (kind === 'nuke') {
+          if (kind === 'orbital') {
+            _v2.set(x, 18, z); _v3.set(x, 0, z);
+            this.beams.add(_v2, _v3, '#fff1a8', r * 0.38, 0.55, 1.8);
+            this.beams.add(_v2, _v3, '#ffffff', r * 0.12, 0.4, 2);
+            this.rings.add(x, 0.1, z, 0.2, r * 2.5, 0.8, '#fff1a8', 3);
+            this.sparks.burst(x, 0.3, z, 120, '#fff1a8', 6, 1, 1.2, 2.5);
+            this.glows.spawn(x, 0.5, z, 0, 0.5, 0, 0.6, '#ffffff', 1.6);
+            this.shake = Math.max(this.shake, 0.6);
+            this.onFlash && this.onFlash();
+          } else if (kind === 'meteor') {
+            this.rings.add(x, 0.08, z, 0.05, r * 1.2, 0.4, '#ff7a3d', 2.2);
+            this.glows.spawn(x, 0.3, z, 0, 0.4, 0, 0.5, '#ffb070', 2.5);
+            this.sparks.burst(x, 0.2, z, busy ? 6 : 16, '#ffcf8a', 3.5, 0.6, 1);
+            this.shake = Math.max(this.shake, 0.12);
+          } else if (kind === 'nuke') {
             this.rings.add(x, 0.1, z, 0.3, r * 1.3, 0.9, '#fff1c2', 3);
             this.rings.add(x, 0.1, z, 0.1, r * 0.8, 0.6, '#ff9f43', 3);
             for (let i = 0; i < 14; i++) this.glows.spawn(x + (Math.random() - 0.5) * r, 0.2 + Math.random() * 0.8, z + (Math.random() - 0.5) * r, (Math.random() - 0.5) * 2, 1 + Math.random() * 2, (Math.random() - 0.5) * 2, 1.4, i % 2 ? '#ffb347' : '#fff1c2', 2.5);
@@ -694,9 +766,40 @@ export class View {
           break;
         }
         case 'leak':
-          this.rings.add(this.map.base.x, 0.1, this.map.base.z, 0.4, 1.6, 0.5, '#ff5c7a', 2.5);
+          if (this.map.base) this.rings.add(this.map.base.x, 0.1, this.map.base.z, 0.4, 1.6, 0.5, '#ff5c7a', 2.5);
           this.shake = Math.max(this.shake, ev.dmg >= 10 ? 0.6 : 0.15);
           this.shieldHit = 0.4;
+          break;
+        case 'beam': {
+          this.muzzle(ev.tid, _v2);
+          for (const [x1, z1, x2, z2] of ev.lines) {
+            _v.set(_v2.x, _v2.y, _v2.z); _v3.set(x2, 0.3, z2);
+            this.beams.add(_v, _v3, ev.scorch ? '#ff7a3d' : '#ffe066', ev.width * 0.9, 0.6, 3);
+            this.beams.add(_v, _v3, '#ffffff', ev.width * 0.3, 0.45, 3);
+            const L = Math.hypot(x2 - x1, z2 - z1);
+            for (let i = 0; i < Math.min(80, L * 3); i++) {
+              const k = Math.random();
+              this.sparks.spawn(x1 + (x2 - x1) * k, 0.3, z1 + (z2 - z1) * k, (Math.random() - 0.5) * 2, Math.random() * 2.5, (Math.random() - 0.5) * 2, 0.6, ev.scorch ? '#ffb070' : '#fff3b0', 2.2);
+            }
+          }
+          this.glows.spawn(_v2.x, _v2.y, _v2.z, 0, 0, 0, 0.4, '#fff3b0', 3);
+          this.shake = Math.max(this.shake, 0.3);
+          break;
+        }
+        case 'orbitalCharge':
+          this.rings.add(ev.x, 0.06, ev.z, ev.r * 2.2, ev.r, ev.t, '#fff1a8', 2);
+          break;
+        case 'stasis':
+          this.rings.add(ev.x, 0.1, ev.z, 0.2, ev.r, 0.6, '#9fdcff', 3);
+          this.rings.add(ev.x, 0.1, ev.z, ev.r, ev.r, 4, '#7cc7ff', 0.8);
+          for (let i = 0; i < 60; i++) { const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * ev.r; this.sparks.spawn(ev.x + Math.cos(a) * r, 0.1, ev.z + Math.sin(a) * r, 0, 0.8 + Math.random(), 0, 1, '#dff4ff', 2); }
+          break;
+        case 'overdrive':
+          for (const t of this.game.towers) this.rings.add(t.x, PAD_Y + 0.05, t.z, 0.2, 1.1, 0.7, '#c792ff', 2.5);
+          break;
+        case 'repair':
+          this.shieldHeal = 0.8;
+          if (this.map.base) { this.rings.add(this.map.base.x, 0.1, this.map.base.z, 0.3, 2, 0.8, '#9cff57', 2.5); this.sparks.burst(this.map.base.x, 0.6, this.map.base.z, 50, '#9cff57', 2.5, 1, 1.5); }
           break;
         case 'build': case 'upgraded': {
           const t = this.game.towers.find(x => x.id === ev.tid); if (!t) break;
@@ -712,23 +815,48 @@ export class View {
   }
 
   // ----- selection / build preview -----
-  setPreview({ buildType, hover, selected, canPlace }) {
+  setPreview({ buildType, hover, selected, canPlace, aim, power, lines, hoverColor, nextRanges }) {
     for (const k in this.ghosts) this.ghosts[k].group.visible = false;
     this.rangeRing.visible = false; this.selRing.visible = false; this.hoverTile.visible = false;
+    this.nextRings.forEach(r => r.visible = false);
+    if (selected && nextRanges && selected.s.kind !== 'beam') {
+      nextRanges.slice(0, 2).forEach((nr, i) => {
+        if (!nr || Math.abs(nr.range - selected.s.range) < 0.01) return;
+        const g = this.nextRings[i];
+        g.visible = true; g.position.x = selected.x; g.position.z = selected.z; g.position.y = PAD_Y + 0.025 + i * 0.004;
+        g.scale.setScalar(nr.range); g.setColor(nr.color || 0xffd166);
+        g.children[1].material.opacity = 0.03;
+      });
+    }
+    this.preview.list.length = 0;
+    const L = (x1, z1, x2, z2, col, w = 0.03, k = 2) => { _v.set(x1, PAD_Y + 0.06, z1); _v3.set(x2, PAD_Y + 0.06, z2); this.preview.add(_v, _v3, col, w, 1, k); };
+    if (lines) for (const l of lines) L(l[0], l[1], l[2], l[3], l[4] || '#4df3c9', l[5] || 0.05, 1.6);
+    if (aim) {
+      const t = aim.tower, s = t.s, n = s.beams || 1;
+      const base = Math.atan2(aim.z - t.z, aim.x - t.x);
+      for (let i = 0; i < n; i++) {
+        const a = base + (n > 1 ? (i - (n - 1) / 2) * s.spread : 0);
+        L(t.x, t.z, t.x + Math.cos(a) * 40, t.z + Math.sin(a) * 40, aim.ready ? '#ffe066' : '#7d6a3a', aim.ready ? 0.035 : 0.02, aim.ready ? 1.6 : 0.8);
+      }
+    }
+    if (power && power.point) {
+      this.rangeRing.visible = true; this.rangeRing.position.x = power.point.x; this.rangeRing.position.z = power.point.z;
+      this.rangeRing.scale.setScalar(POWERS[power.id].radius); this.rangeRing.setColor(power.ok ? POWERS[power.id].color : '#ff5c7a');
+    }
     if (hover) { this.hoverTile.visible = true; this.hoverTile.position.set(hover.c + 0.5, PAD_Y + 0.01, hover.r + 0.5); }
     if (buildType && hover) {
       const gh = this.ghost(buildType);
       gh.group.visible = true; gh.group.position.set(hover.c + 0.5, PAD_Y, hover.r + 0.5);
       gh.mat.color.set(canPlace ? TOWERS[buildType].color : '#ff5c7a');
-      this.rangeRing.visible = true; this.rangeRing.position.x = hover.c + 0.5; this.rangeRing.position.z = hover.r + 0.5;
+      this.rangeRing.visible = !TOWERS[buildType].manual; this.rangeRing.position.x = hover.c + 0.5; this.rangeRing.position.z = hover.r + 0.5;
       this.rangeRing.scale.setScalar(TOWERS[buildType].base.range); this.rangeRing.setColor(canPlace ? 0x4df3c9 : 0xff5c7a);
       this.hoverTile.material.color.set(canPlace ? 0x4df3c9 : 0xff5c7a);
-    } else this.hoverTile.material.color.set(0x7d9cc8);
-    if (selected) {
+    } else this.hoverTile.material.color.set(hoverColor || 0x7d9cc8);
+    if (selected && selected.s.kind !== 'beam') {
       this.rangeRing.visible = true; this.rangeRing.position.x = selected.x; this.rangeRing.position.z = selected.z;
       this.rangeRing.scale.setScalar(selected.s.range); this.rangeRing.setColor(0x4df3c9);
-      this.selRing.visible = true; this.selRing.position.set(selected.x, PAD_Y + 0.03, selected.z);
     }
+    if (selected) { this.selRing.visible = true; this.selRing.position.set(selected.x, PAD_Y + 0.03, selected.z); }
   }
 
   frame(dt, events) {
@@ -750,10 +878,14 @@ export class View {
       }
     }
     this.shieldHit = Math.max(0, (this.shieldHit || 0) - dt);
-    const lf = this.game.lives / START_LIVES;
-    this.shield.material.opacity = 0.05 + 0.16 * lf + Math.sin(this.time * 3) * 0.02 + this.shieldHit * 0.8;
-    this.shield.material.color.set(this.shieldHit > 0 ? 0xff5c7a : 0x4df3c9);
-    this.baseCore.scale.setScalar(1 + Math.sin(this.time * 4) * 0.12);
+    this.shieldHeal = Math.max(0, (this.shieldHeal || 0) - dt);
+    if (this.shield) {
+      const lf = this.game.lives / (this.game.maxLives || 100);
+      this.shield.material.opacity = 0.05 + 0.16 * lf + Math.sin(this.time * 3) * 0.02 + (this.shieldHit + this.shieldHeal) * 0.8;
+      this.shield.material.color.set(this.shieldHit > 0 ? 0xff5c7a : this.shieldHeal > 0 ? 0x9cff57 : 0x4df3c9);
+      this.baseCore.scale.setScalar(1 + Math.sin(this.time * 4) * 0.12);
+    }
+    this.preview.update(0);
     if (this.quality === 'high') this.composer.render(); else this.renderer.render(this.scene, this.camera);
   }
 

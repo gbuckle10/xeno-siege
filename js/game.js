@@ -2,40 +2,87 @@
 // Pure logic: no DOM, no Three.js. The browser game and tools/balance.mjs both use this file.
 // World units: 1 unit = 1 tile. x runs left→right (columns), z runs top→bottom (rows).
 
-export const COLS = 24, ROWS = 15;
-export const START_CREDITS = 220;
 export const START_LIVES = 100;
 
-// ---------- Map ----------
-export const WAY = [[-1,2],[5,2],[5,7],[2,7],[2,12],[10,12],[10,4],[15,4],[15,10],[20,10],[20,6],[22,6]]
-  .map(([c, r]) => ({ x: c + 0.5, z: r + 0.5 }));
-export const BASE = WAY[WAY.length - 1];
+// ---------- Maps ----------
+// Each lane is a list of [col, row] waypoints. The first point sits just outside the map (the rift),
+// and every lane must end on the same tile (the base). Lanes may share tiles where they merge.
+export const MAPS = [
+  {
+    id: 'spiral', name: 'The Spiral', difficulty: 'Easy', cols: 24, rows: 15, credits: 260, hpScale: 1.0,
+    desc: 'One very long lane that coils inward to a base at the centre. Plenty of time to shoot.',
+    lanes: [[[-1,1],[22,1],[22,13],[1,13],[1,4],[19,4],[19,10],[4,10],[4,7],[12,7]]],
+  },
+  {
+    id: 'valley', name: 'Rift Valley', difficulty: 'Normal', cols: 24, rows: 15, credits: 220, hpScale: 1.1,
+    desc: 'A single winding lane through the valley. The classic.',
+    lanes: [[[-1,2],[5,2],[5,7],[2,7],[2,12],[10,12],[10,4],[15,4],[15,10],[20,10],[20,6],[22,6]]],
+  },
+  {
+    id: 'twin', name: 'Twin Rifts', difficulty: 'Hard', cols: 24, rows: 15, credits: 260, hpScale: 1.0,
+    desc: 'Two rifts split the swarm into lanes that merge halfway. Cover both or get flanked.',
+    lanes: [
+      [[-1,2],[6,2],[6,6],[11,6],[11,7],[16,7],[16,2],[20,2],[20,12],[22,12]],
+      [[-1,12],[6,12],[6,8],[11,8],[11,7],[16,7],[16,2],[20,2],[20,12],[22,12]],
+    ],
+  },
+  {
+    id: 'hive', name: 'Hive Breach', difficulty: 'Brutal', cols: 24, rows: 15, credits: 300, hpScale: 1.2,
+    desc: 'Three rifts converge on a short run to your base. Only for veterans.',
+    lanes: [
+      [[8,-1],[8,7],[13,7],[13,2],[18,2],[18,12],[22,12]],
+      [[-1,7],[8,7],[13,7],[13,2],[18,2],[18,12],[22,12]],
+      [[8,15],[8,7],[13,7],[13,2],[18,2],[18,12],[22,12]],
+    ],
+  },
+];
 
-export const SEG = [];
-let len = 0;
-for (let i = 0; i < WAY.length - 1; i++) {
-  const a = WAY[i], b = WAY[i + 1], l = Math.hypot(b.x - a.x, b.z - a.z);
-  SEG.push({ a, b, len: l, start: len, ux: (b.x - a.x) / l, uz: (b.z - a.z) / l });
-  len += l;
-}
-export const PATH_LEN = len;
-
-export const pathTiles = new Set();
-for (const s of SEG) {
-  const steps = Math.round(s.len);
-  for (let i = 0; i <= steps; i++) {
-    const c = Math.floor(s.a.x + s.ux * i), r = Math.floor(s.a.z + s.uz * i);
-    if (c >= 0 && c < COLS && r >= 0 && r < ROWS) pathTiles.add(c + ',' + r);
+function buildMap(def) {
+  const m = { ...def, paths: [], pathTiles: new Set(), entrances: new Set() };
+  for (const pts of def.lanes) {
+    const way = pts.map(([c, r]) => ({ x: c + 0.5, z: r + 0.5 }));
+    const seg = []; let len = 0;
+    for (let i = 0; i < way.length - 1; i++) {
+      const a = way[i], b = way[i + 1], l = Math.hypot(b.x - a.x, b.z - a.z);
+      seg.push({ a, b, len: l, start: len, ux: (b.x - a.x) / l, uz: (b.z - a.z) / l });
+      len += l;
+    }
+    for (const s of seg) {
+      for (let i = 0; i <= Math.round(s.len); i++) {
+        const c = Math.floor(s.a.x + s.ux * i), r = Math.floor(s.a.z + s.uz * i);
+        if (c >= 0 && c < m.cols && r >= 0 && r < m.rows) m.pathTiles.add(c + ',' + r);
+      }
+    }
+    m.paths.push({ way, seg, len });
+    m.entrances.add(pts[0][0] + ',' + pts[0][1]);
   }
+  m.base = m.paths[0].way[m.paths[0].way.length - 1];
+  return m;
 }
+const MAP_CACHE = new Map(MAPS.map(d => [d.id, buildMap(d)]));
+export const getMap = id => MAP_CACHE.get(id) || MAP_CACHE.get('valley');
+export const MAP_IDS = MAPS.map(d => d.id);
 
-// Point on the lane centre at distance d (no lateral offset).
-export function posAt(d, out = {}) {
-  let s = SEG[SEG.length - 1];
-  for (const g of SEG) if (d <= g.start + g.len) { s = g; break; }
+// Point on a lane's centre line at distance d (no sideways offset).
+export function posAt(path, d, out = {}) {
+  let s = path.seg[path.seg.length - 1];
+  for (const g of path.seg) if (d <= g.start + g.len) { s = g; break; }
   const k = Math.min(d, s.start + s.len) - s.start;
   out.x = s.a.x + s.ux * k; out.z = s.a.z + s.uz * k; out.dx = s.ux; out.dz = s.uz;
   return out;
+}
+
+// Buildable tiles ranked by how much lane is within `range` of them (used by the demo battle and balance bot).
+export function rankBuildSpots(map, range = 3) {
+  const tiles = [...map.pathTiles].map(k => k.split(',').map(Number));
+  const out = [];
+  for (let c = 0; c < map.cols; c++) for (let r = 0; r < map.rows; r++) {
+    if (map.pathTiles.has(c + ',' + r)) continue;
+    let score = 0;
+    for (const [pc, pr] of tiles) if (Math.hypot(pc - c, pr - r) <= range) score++;
+    out.push({ c, r, score });
+  }
+  return out.sort((a, b) => b.score - a.score || a.c - b.c || a.r - b.r);
 }
 
 // ---------- Towers ----------
@@ -142,7 +189,7 @@ export const ALIENS = {
   grunt:   { name: 'Grunt',      hp: 55,   speed: 1.2,  reward: 3,   dmg: 2,  r: 0.22, color: '#57e3ff' },
   shell:   { name: 'Shellback',  hp: 230,  speed: 0.8,  reward: 10,  dmg: 5,  r: 0.30, armor: 6, color: '#ff6bd6' },
   brood:   { name: 'Brood Sac',  hp: 170,  speed: 0.9,  reward: 8,   dmg: 4,  r: 0.30, split: 8, color: '#c77dff' },
-  queen:   { name: 'Hive Queen', hp: 2600, speed: 0.7,  reward: 150, dmg: 25, r: 0.60, armor: 4, boss: true, color: '#ffd166' },
+  queen:   { name: 'Hive Queen', hp: 1800, speed: 0.75, reward: 150, dmg: 20, r: 0.60, armor: 4, boss: true, color: '#ffd166' },
 };
 export const hpMult = w => 1.17 ** (w - 1) * (1 + 0.05 * (w - 1));
 
@@ -171,21 +218,20 @@ export function waveSummary(w) {
 }
 
 // ---------- Spatial grid (fast "who is near here?" lookups for big swarms) ----------
-const GW = COLS + 4, GH = ROWS + 4;
 class Grid {
-  constructor() { this.cells = Array.from({ length: GW * GH }, () => []); }
+  constructor(cols, rows) { this.w = cols + 4; this.h = rows + 4; this.cells = Array.from({ length: this.w * this.h }, () => []); }
   clear() { for (const c of this.cells) c.length = 0; }
   add(e) {
     const cx = Math.floor(e.x) + 2, cz = Math.floor(e.z) + 2;
-    if (cx >= 0 && cz >= 0 && cx < GW && cz < GH) this.cells[cx + cz * GW].push(e);
+    if (cx >= 0 && cz >= 0 && cx < this.w && cz < this.h) this.cells[cx + cz * this.w].push(e);
   }
   query(x, z, r, out) {
     out.length = 0;
-    const r2 = r * r;
-    const x0 = Math.max(0, Math.floor(x - r) + 2), x1 = Math.min(GW - 1, Math.floor(x + r) + 2);
-    const z0 = Math.max(0, Math.floor(z - r) + 2), z1 = Math.min(GH - 1, Math.floor(z + r) + 2);
+    const r2 = r * r, W = this.w;
+    const x0 = Math.max(0, Math.floor(x - r) + 2), x1 = Math.min(W - 1, Math.floor(x + r) + 2);
+    const z0 = Math.max(0, Math.floor(z - r) + 2), z1 = Math.min(this.h - 1, Math.floor(z + r) + 2);
     for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) {
-      for (const e of this.cells[cx + cz * GW]) {
+      for (const e of this.cells[cx + cz * W]) {
         if (e.dead) continue;
         const dx = e.x - x, dz = e.z - z;
         if (dx * dx + dz * dz <= r2) out.push(e);
@@ -206,16 +252,22 @@ function first(list) { let b = list[0]; for (const e of list) if (e.d > b.d) b =
 export class Game {
   constructor(opts = {}) {
     this.rand = opts.rand || Math.random;
-    this.grid = new Grid();
     this._q = []; this._q2 = []; this._hit = new Set(); this._p = {};
+    this.demo = false;          // demo battle on the home screen: leaks cost nothing
+    this.setMap(opts.map || 'valley');
+  }
+
+  setMap(id) {
+    this.map = getMap(id);
+    this.grid = new Grid(this.map.cols, this.map.rows);
     this.reset();
   }
 
   reset() {
     Object.assign(this, {
-      credits: START_CREDITS, lives: START_LIVES, wave: 0, kills: 0, time: 0,
+      credits: this.map.credits, lives: START_LIVES, wave: 0, kills: 0, time: 0,
       enemies: [], pending: [], towers: [], projectiles: [], wells: [], events: [],
-      groups: [], gi: 0, gCount: 0, gTimer: 0, waveActive: false, over: false, uid: 0,
+      groups: [], gi: 0, gCount: 0, gTimer: 0, waveActive: false, over: false, uid: 0, spawnIdx: 0,
     });
     this.grid.clear();
   }
@@ -224,11 +276,11 @@ export class Game {
   emit(ev) { if (this.events.length < 4000) this.events.push(ev); }
 
   // ----- Enemies -----
-  spawnEnemy(type, d = 0, off = null) {
+  spawnEnemy(type, d = 0, off = null, pi = null) {
     const a = ALIENS[type], w = Math.max(1, this.wave);
-    const hp = Math.round(a.hp * hpMult(w));
+    const hp = Math.round(a.hp * (a.boss ? hpMult(w) ** 0.88 : hpMult(w)) * this.map.hpScale);
     const e = {
-      id: ++this.uid, type, hp, max: hp, d,
+      id: ++this.uid, type, hp, max: hp, d, pi: pi ?? (this.spawnIdx++ % this.map.paths.length),
       speed: a.speed * (0.92 + this.rand() * 0.16), armor: a.armor || 0,
       reward: a.reward * (1 + 0.02 * (w - 1)), dmg: a.dmg,
       off: off ?? (a.boss ? 0 : (this.rand() - 0.5) * 0.72),
@@ -243,6 +295,7 @@ export class Game {
 
   // Position on the lane plus a sideways offset, blended smoothly around corners.
   placeEnemy(e) {
+    const SEG = this.map.paths[e.pi].seg;
     while (e.si < SEG.length - 1 && e.d > SEG[e.si].start + SEG[e.si].len) e.si++;
     const s = SEG[e.si];
     const k = Math.min(Math.max(e.d - s.start, 0), s.len);
@@ -277,7 +330,7 @@ export class Game {
     if (src) src.kills++;
     this.emit({ e: 'death', type: e.type, x: e.x, z: e.z, reward: e.reward });
     const a = ALIENS[e.type];
-    if (a.split) for (let i = 0; i < a.split; i++) this.spawnEnemy('skitter', Math.max(0, e.d - this.rand() * 0.6), (this.rand() - 0.5) * 0.72);
+    if (a.split) for (let i = 0; i < a.split; i++) this.spawnEnemy('skitter', Math.max(0, e.d - this.rand() * 0.6), (this.rand() - 0.5) * 0.72, e.pi);
     if (a.boss) this.emit({ e: 'bossDown', x: e.x, z: e.z, reward: e.reward });
   }
 
@@ -288,8 +341,8 @@ export class Game {
 
   // ----- Towers -----
   canBuild(c, r) {
-    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return false;
-    if (pathTiles.has(c + ',' + r)) return false;
+    if (c < 0 || r < 0 || c >= this.map.cols || r >= this.map.rows) return false;
+    if (this.map.pathTiles.has(c + ',' + r)) return false;
     return !this.towers.some(t => t.c === c && t.r === r);
   }
   towerAt(c, r) { return this.towers.find(t => t.c === c && t.r === r) || null; }
@@ -349,7 +402,8 @@ export class Game {
       const tg = first(list);
       const dist = Math.hypot(tg.x - t.x, tg.z - t.z), dur = 0.6 + dist * 0.12;
       const sp = tg.speed * (tg.freezeT > 0 ? 0 : tg.slowT > 0 ? 1 - tg.slowAmt : 1);
-      const p = posAt(Math.min(tg.d + sp * dur, PATH_LEN - 0.01), this._p);
+      const path = this.map.paths[tg.pi];
+      const p = posAt(path, Math.min(tg.d + sp * dur, path.len - 0.01), this._p);
       aim(p);
       this.projectiles.push({ k: s.well ? 'void' : 'shell', sx: t.x, sz: t.z, x: t.x, y: 0.6, z: t.z, tx: p.x, tz: p.z,
         t: 0, dur, h: 2.4, dmg: s.dmg, splash: s.splash, bomblets: s.bomblets || 0, well: s.well || 0, src: t });
@@ -442,7 +496,7 @@ export class Game {
 
   // ----- Main update -----
   update(dt) {
-    if (this.over) return;
+    if (this.over || !(dt > 0)) return;
     this.time += dt;
 
     // Spawning
@@ -479,10 +533,12 @@ export class Game {
       mul *= e.wellMul; e.wellMul = 1;
       e.d += e.speed * mul * dt;
       e.anim += dt * (0.3 + mul) * e.speed * 4;
-      if (e.d >= PATH_LEN) {
+      if (e.d >= this.map.paths[e.pi].len) {
         e.dead = true; e.leaked = true;
-        this.lives = Math.max(0, this.lives - e.dmg);
-        this.emit({ e: 'leak', dmg: e.dmg, type: e.type });
+        if (!this.demo) {
+          this.lives = Math.max(0, this.lives - e.dmg);
+          this.emit({ e: 'leak', dmg: e.dmg, type: e.type });
+        }
         continue;
       }
       this.placeEnemy(e);

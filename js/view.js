@@ -1,6 +1,6 @@
 // 3D renderer for Xeno Siege (Three.js). Reads the Game state each frame and turns events into effects.
 import * as THREE from '../vendor/three.bundle.js';
-import { COLS, ROWS, WAY, BASE, TOWERS, ALIENS, pathTiles, START_LIVES } from './game.js';
+import { TOWERS, ALIENS, START_LIVES } from './game.js';
 import { alienGeometries, buildTower, glowMat } from './models.js';
 
 const TYPES = Object.keys(ALIENS);
@@ -153,13 +153,12 @@ export class View {
     this.scene.background = new THREE.Color(0x03050b);
     this.scene.fog = new THREE.Fog(0x03050b, 28, 62);
     this.camera = new THREE.PerspectiveCamera(36, 1, 0.1, 200);
-    this.cam = { x: COLS / 2, z: ROWS / 2, dist: 22, pitch: 0.98, fit: 22, userZoomed: false };
+    this.cam = { x: 12, z: 7.5, dist: 22, pitch: 0.98, fit: 22, userZoomed: false };
     this.shake = 0;
     this.time = 0;
     this.tex = softDot();
 
     this.buildLights();
-    this.buildWorld();
     this.buildAliens();
     this.buildHelpers();
     this.beams = new Beams(this.scene, 5000);
@@ -176,8 +175,9 @@ export class View {
     this.composer.addPass(this.bloom);
     this.composer.addPass(new THREE.OutputPass());
 
+    this.quality = 'high';
+    this.loadMap(game.map);
     this.setQuality('high');
-    this.resize();
   }
 
   setQuality(q) {
@@ -187,6 +187,7 @@ export class View {
     this.renderer.shadowMap.enabled = high;
     this.renderer.toneMappingExposure = high ? 1.05 : 1.55;
     this.sun.castShadow = high;
+    this.shadowsOn = high;
     this.scene.traverse(o => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); } });
     this.resize();
   }
@@ -194,31 +195,52 @@ export class View {
   buildLights() {
     this.scene.add(new THREE.HemisphereLight(0x8fb3ff, 0x0b0b18, 0.75));
     const sun = new THREE.DirectionalLight(0xd6e4ff, 1.7);
-    sun.position.set(COLS / 2 - 7, 20, ROWS / 2 + 9);
-    sun.target.position.set(COLS / 2, 0, ROWS / 2);
     sun.shadow.mapSize.set(2048, 2048);
-    Object.assign(sun.shadow.camera, { left: -17, right: 17, top: 13, bottom: -13, near: 2, far: 50 });
     sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02;
     this.scene.add(sun, sun.target);
     this.sun = sun;
-    const rim = new THREE.DirectionalLight(0x9a6bff, 0.5);
-    rim.position.set(COLS + 6, 6, -6);
-    this.scene.add(rim);
+    this.rim = new THREE.DirectionalLight(0x9a6bff, 0.5);
+    this.scene.add(this.rim);
   }
 
-  buildWorld() {
-    const S = this.scene;
+  // Build (or rebuild) everything that depends on the map, and clear leftover effects.
+  loadMap(map) {
+    if (this.world) {
+      this.scene.remove(this.world);
+      this.world.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.map) o.material.map.dispose(); });
+    }
+    for (const [, o] of this.towerObjs) this.scene.remove(o.obj.group);
+    this.towerObjs.clear();
+    this.beams.list.length = 0; this.sparks.n = 0; this.glows.n = 0; this.rings.list.length = 0;
+    for (const w of this.wellObjs) w.visible = false;
+    this.shake = 0;
+
+    this.map = map;
+    const W = this.world = new THREE.Group();
+    this.scene.add(W);
+    const COLS = map.cols, ROWS = map.rows, pathTiles = map.pathTiles;
+
+    // Lighting follows the map
+    this.sun.position.set(COLS / 2 - 7, 20, ROWS / 2 + 9);
+    this.sun.target.position.set(COLS / 2, 0, ROWS / 2);
+    const hx = COLS / 2 + 5, hz = ROWS / 2 + 5;
+    Object.assign(this.sun.shadow.camera, { left: -hx, right: hx, top: hz, bottom: -hz, near: 2, far: 50 });
+    this.sun.shadow.camera.updateProjectionMatrix();
+    this.rim.position.set(COLS + 6, 6, -6);
+
     // Far ground
     const far = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), new THREE.MeshStandardMaterial({ color: 0x05070d, roughness: 1 }));
     far.rotation.x = -Math.PI / 2; far.position.set(COLS / 2, -0.02, ROWS / 2); far.receiveShadow = true;
-    S.add(far);
+    W.add(far);
 
-    // Map floor with a painted lane
+    // Map floor with painted lanes
     const px = 64, cv = document.createElement('canvas'); cv.width = COLS * px; cv.height = ROWS * px;
     const g = cv.getContext('2d');
     g.fillStyle = '#060a14'; g.fillRect(0, 0, cv.width, cv.height);
     g.strokeStyle = 'rgba(77,243,201,0.55)'; g.lineWidth = 4; g.setLineDash([12, 20]); g.lineCap = 'round';
-    g.beginPath(); WAY.forEach((p, i) => i ? g.lineTo(p.x * px, p.z * px) : g.moveTo(p.x * px, p.z * px)); g.stroke();
+    for (const path of map.paths) {
+      g.beginPath(); path.way.forEach((p, i) => i ? g.lineTo(p.x * px, p.z * px) : g.moveTo(p.x * px, p.z * px)); g.stroke();
+    }
     g.setLineDash([]);
     for (const k of pathTiles) {
       const [c, r] = k.split(',').map(Number);
@@ -229,40 +251,39 @@ export class View {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(COLS, ROWS), new THREE.MeshStandardMaterial({
       map: tex, roughness: 0.8, metalness: 0.2, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.35 }));
     floor.rotation.x = -Math.PI / 2; floor.position.set(COLS / 2, 0, ROWS / 2); floor.receiveShadow = true;
-    S.add(floor);
+    W.add(floor);
 
     // Raised build pads on every non-lane tile
     const pads = [];
     for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) if (!pathTiles.has(c + ',' + r)) pads.push([c, r]);
-    const padGeo = new THREE.BoxGeometry(0.94, PAD_Y, 0.94);
-    const padMesh = new THREE.InstancedMesh(padGeo, new THREE.MeshStandardMaterial({ color: 0x111b30, metalness: 0.55, roughness: 0.5 }), pads.length);
+    const padMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.94, PAD_Y, 0.94), new THREE.MeshStandardMaterial({ color: 0x111b30, metalness: 0.55, roughness: 0.5 }), pads.length);
     pads.forEach(([c, r], i) => { _m.makeTranslation(c + 0.5, PAD_Y / 2, r + 0.5); padMesh.setMatrixAt(i, _m); });
     padMesh.receiveShadow = true; padMesh.castShadow = true;
-    S.add(padMesh);
-    const dotGeo = new THREE.PlaneGeometry(0.05, 0.05).rotateX(-Math.PI / 2);
-    const dots = new THREE.InstancedMesh(dotGeo, glowMat('#5a86d6', 0.9), pads.length);
+    W.add(padMesh);
+    const dots = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.05, 0.05).rotateX(-Math.PI / 2), glowMat('#5a86d6', 0.9), pads.length);
     pads.forEach(([c, r], i) => { _m.makeTranslation(c + 0.5, PAD_Y + 0.002, r + 0.5); dots.setMatrixAt(i, _m); });
-    S.add(dots);
+    W.add(dots);
 
-    // Glowing curbs along both sides of the lane
+    // Glowing curbs along both sides of every lane (open where a lane enters from a rift)
     const strips = [];
     for (const k of pathTiles) {
       const [c, r] = k.split(',').map(Number);
       for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nc = c + dc, nr = r + dr;
-        if (pathTiles.has(nc + ',' + nr) || nc < 0) continue;
+        if (pathTiles.has(nc + ',' + nr) || map.entrances.has(nc + ',' + nr)) continue;
         const geo = dc ? new THREE.BoxGeometry(0.04, 0.03, 1) : new THREE.BoxGeometry(1, 0.03, 0.04);
         geo.translate(c + 0.5 + dc * 0.5, PAD_Y + 0.005, r + 0.5 + dr * 0.5);
         strips.push(geo);
       }
     }
-    S.add(new THREE.Mesh(THREE.mergeGeometries(strips), glowMat('#4df3c9', 0.85)));
+    W.add(new THREE.Mesh(THREE.mergeGeometries(strips), glowMat('#4df3c9', 0.85)));
 
     // Scenery outside the map
     const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x1a1f33, roughness: 0.9, metalness: 0.1, flatShading: true }), 140);
     const crystals = new THREE.InstancedMesh(new THREE.OctahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x7a4dff, emissive: 0x6a3df0, emissiveIntensity: 1.3, roughness: 0.2, flatShading: true }), 70);
-    let seed = 3; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const outside = () => { for (;;) { const x = -10 + rnd() * (COLS + 20), z = -8 + rnd() * (ROWS + 16); if (x < -0.6 || x > COLS + 0.6 || z < -0.6 || z > ROWS + 0.6) return [x, z]; } };
+    let seed = 3 + map.id.length * 17; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const nearEntrance = (x, z) => map.paths.some(p => Math.hypot(p.way[0].x - x, p.way[0].z - z) < 2.2);
+    const outside = () => { for (;;) { const x = -10 + rnd() * (COLS + 20), z = -8 + rnd() * (ROWS + 16); if ((x < -0.6 || x > COLS + 0.6 || z < -0.6 || z > ROWS + 0.6) && !nearEntrance(x, z)) return [x, z]; } };
     for (let i = 0; i < 140; i++) {
       const [x, z] = outside(), s = 0.15 + rnd() * 0.6;
       _m.compose(_v.set(x, s * 0.4, z), _q.setFromEuler(new THREE.Euler(rnd() * 3, rnd() * 3, rnd() * 3)), _s.set(s, s * (0.6 + rnd() * 0.6), s));
@@ -274,21 +295,26 @@ export class View {
       crystals.setMatrixAt(i, _m);
     }
     rocks.castShadow = rocks.receiveShadow = true;
-    S.add(rocks, crystals);
+    W.add(rocks, crystals);
 
-    // Rift portal where aliens arrive
-    const portal = new THREE.Group();
-    portal.position.set(-0.15, 0.62, WAY[0].z);
-    portal.rotation.y = Math.PI / 2;
-    portal.add(new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.05, 8, 40), glowMat('#9cff57', 2.2)));
-    const swirl = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.025, 6, 32, Math.PI * 1.4), glowMat('#d8ff8a', 2));
-    portal.add(swirl);
-    portal.add(new THREE.Mesh(new THREE.CircleGeometry(0.58, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color('#2a5a10'), transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false })));
-    this.portalSwirl = swirl;
-    S.add(portal);
+    // A rift portal where each lane starts
+    this.portals = [];
+    for (const path of map.paths) {
+      const a = path.way[0], b = path.way[1], L = Math.hypot(b.x - a.x, b.z - a.z), dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
+      const portal = new THREE.Group();
+      const px0 = a.x + dx * 0.35, pz0 = a.z + dz * 0.35;
+      portal.position.set(px0, 0.62, pz0);
+      portal.rotation.y = Math.atan2(dx, dz);
+      portal.add(new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.05, 8, 40), glowMat('#9cff57', 2.2)));
+      const swirl = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.025, 6, 32, Math.PI * 1.4), glowMat('#d8ff8a', 2));
+      portal.add(swirl);
+      portal.add(new THREE.Mesh(new THREE.CircleGeometry(0.58, 32), new THREE.MeshBasicMaterial({ color: new THREE.Color('#2a5a10'), transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false })));
+      W.add(portal);
+      this.portals.push({ swirl, x: px0, z: pz0, dx, dz });
+    }
 
     // Player base
-    const base = new THREE.Group(); base.position.set(BASE.x, 0, BASE.z);
+    const base = new THREE.Group(); base.position.set(map.base.x, 0, map.base.z);
     const bm = new THREE.MeshStandardMaterial({ color: 0x23365c, metalness: 0.75, roughness: 0.3 });
     const mk = (geo, mat, y) => { const m = new THREE.Mesh(geo, mat); m.position.y = y; m.castShadow = m.receiveShadow = true; base.add(m); return m; };
     mk(new THREE.CylinderGeometry(0.62, 0.72, 0.2, 6), bm, 0.1);
@@ -299,7 +325,11 @@ export class View {
     this.shield = new THREE.Mesh(new THREE.SphereGeometry(1.15, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0x4df3c9, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     base.add(this.shield);
-    S.add(base);
+    W.add(base);
+
+    if (this.shadowsOn !== undefined) this.setQuality(this.quality);
+    this.cam.fit = this.fitDistance();
+    this.resetCamera();
   }
 
   buildAliens() {
@@ -372,14 +402,23 @@ export class View {
   }
 
   // ----- camera -----
+  // Keep the map clear of UI covering part of the canvas (the home screen menu). Pixels from the left / bottom.
+  setInset(left = 0, bottom = 0) {
+    if (left === (this.inset?.left || 0) && bottom === (this.inset?.bottom || 0)) return;
+    this.inset = { left, bottom };
+    this.resize();
+  }
   fitDistance() {
+    const { cols: COLS, rows: ROWS } = this.map;
+    const w = this.canvas.clientWidth || 800, h = this.canvas.clientHeight || 500, ins = this.inset || { left: 0, bottom: 0 };
+    const xMin = -1 + 2 * ins.left / w + 0.03, yMin = -1 + 2 * ins.bottom / h + 0.03;
     const corners = [[0, 0], [COLS, 0], [0, ROWS], [COLS, ROWS]];
-    let lo = 4, hi = 80;
+    let lo = 4, hi = 150;
     const save = { ...this.cam };
     for (let i = 0; i < 24; i++) {
       const mid = (lo + hi) / 2;
       this.cam.dist = mid; this.cam.x = COLS / 2; this.cam.z = ROWS / 2 + 0.3; this.applyCamera(true);
-      const ok = corners.every(([x, z]) => { _v.set(x, 0, z).project(this.camera); return Math.abs(_v.x) < 0.97 && Math.abs(_v.y) < 0.95; });
+      const ok = corners.every(([x, z]) => { _v.set(x, 0, z).project(this.camera); return _v.x > xMin && _v.x < 0.97 && _v.y > yMin && _v.y < 0.95; });
       if (ok) hi = mid; else lo = mid;
     }
     Object.assign(this.cam, save);
@@ -391,11 +430,18 @@ export class View {
     this.camera.position.set(c.x + sx, Math.sin(c.pitch) * c.dist, c.z + Math.cos(c.pitch) * c.dist + sz);
     this.camera.lookAt(c.x + sx, 0, c.z + sz);
     this.camera.updateMatrixWorld();
+    this.scene.fog.near = c.dist * 1.15; this.scene.fog.far = c.dist * 2.7 + 6;
+    const ins = this.inset;
+    if (ins && (ins.left || ins.bottom)) {
+      const w = this.canvas.clientWidth || 800, h = this.canvas.clientHeight || 500;
+      if (!this.camera.view || this.camera.view.offsetX !== -ins.left / 2 || this.camera.view.offsetY !== ins.bottom / 2 || this.camera.view.fullWidth !== w)
+        this.camera.setViewOffset(w, h, -ins.left / 2, ins.bottom / 2, w, h);
+    } else if (this.camera.view && this.camera.view.enabled) this.camera.clearViewOffset();
   }
   clampCam() {
     const c = this.cam;
     c.dist = Math.min(Math.max(c.dist, 5), c.fit * 1.25);
-    c.x = Math.min(Math.max(c.x, 0), COLS); c.z = Math.min(Math.max(c.z, 0), ROWS);
+    c.x = Math.min(Math.max(c.x, 0), this.map.cols); c.z = Math.min(Math.max(c.z, 0), this.map.rows);
   }
   zoomAt(factor, clientX, clientY) {
     const before = this.groundAt(clientX, clientY);
@@ -412,7 +458,7 @@ export class View {
     this.cam.userZoomed = true;
     this.clampCam();
   }
-  resetCamera() { this.cam.userZoomed = false; this.cam.dist = this.cam.fit; this.cam.x = COLS / 2; this.cam.z = ROWS / 2 + 0.3; }
+  resetCamera() { this.cam.userZoomed = false; this.cam.dist = this.cam.fit; this.cam.x = this.map.cols / 2; this.cam.z = this.map.rows / 2 + 0.3; }
 
   groundAt(clientX, clientY) {
     const r = this.canvas.getBoundingClientRect();
@@ -648,7 +694,7 @@ export class View {
           break;
         }
         case 'leak':
-          this.rings.add(BASE.x, 0.1, BASE.z, 0.4, 1.6, 0.5, '#ff5c7a', 2.5);
+          this.rings.add(this.map.base.x, 0.1, this.map.base.z, 0.4, 1.6, 0.5, '#ff5c7a', 2.5);
           this.shake = Math.max(this.shake, ev.dmg >= 10 ? 0.6 : 0.15);
           this.shieldHit = 0.4;
           break;
@@ -686,6 +732,7 @@ export class View {
   }
 
   frame(dt, events) {
+    dt = Math.max(0, dt);
     this.time += dt;
     this.shake = Math.max(0, this.shake - dt * 1.6);
     this.applyCamera();
@@ -695,8 +742,13 @@ export class View {
     this.syncProjectiles(dt);
     this.beams.update(dt); this.sparks.update(dt); this.glows.update(dt); this.rings.update(dt);
     // ambient motion
-    this.portalSwirl.rotation.z -= dt * 3;
-    if (Math.random() < 0.6) this.sparks.spawn(0.05, 0.6 + (Math.random() - 0.5) * 0.9, WAY[0].z + (Math.random() - 0.5) * 0.9, 0.6 + Math.random(), 0, 0, 0.5, '#9cff57', 1.5);
+    for (const p of this.portals) {
+      p.swirl.rotation.z -= dt * 3;
+      if (Math.random() < 0.5) {
+        const o = (Math.random() - 0.5) * 0.9, s = 0.6 + Math.random();
+        this.sparks.spawn(p.x - p.dz * o, 0.6 + (Math.random() - 0.5) * 0.9, p.z + p.dx * o, p.dx * s, 0, p.dz * s, 0.5, '#9cff57', 1.5);
+      }
+    }
     this.shieldHit = Math.max(0, (this.shieldHit || 0) - dt);
     const lf = this.game.lives / START_LIVES;
     this.shield.material.opacity = 0.05 + 0.16 * lf + Math.sin(this.time * 3) * 0.02 + this.shieldHit * 0.8;

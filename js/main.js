@@ -1,33 +1,138 @@
-// Glue: game loop, input (mouse + touch), side panel UI, floating text, install prompt.
-import { Game, TOWERS, TOWER_TYPES, ALIENS, BASE, WAY, upgradeOptions, towerName, sellValue, waveSummary, MAX_LVL } from './game.js';
+// Glue: home screen, game loop, input (mouse + touch), side panel UI, menus, install prompt.
+import { Game, TOWERS, TOWER_TYPES, ALIENS, MAPS, getMap, rankBuildSpots, upgradeOptions, towerName, sellValue, waveSummary } from './game.js';
 import { View } from './view.js';
 
 const $ = id => document.getElementById(id);
-const game = new Game();
+const game = new Game({ map: 'spiral' });
 const canvas = $('game');
 let view;
 try {
   view = new View(canvas, game);
 } catch (err) {
+  document.body.classList.remove('home');
   $('card').innerHTML = '<h2 class="bad">NO 3D SUPPORT</h2><p>This browser or device could not start WebGL, which the game needs. Try a recent Chrome, Edge, Firefox or Safari.</p>';
+  $('overlay').classList.remove('hidden');
   throw err;
 }
 
-const ui = { build: null, selected: null, hover: null, speed: 1, paused: false, started: false, shift: false };
-let best = 0;
-try { best = +localStorage.getItem('xenoSiegeBest3d') || 0; } catch (e) {}
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+const ui = { mode: 'home', build: null, selected: null, hover: null, speed: 1, paused: false, shift: false };
+let selectedMap = store.get('xenoSiegeMap', 'spiral');
+if (!MAPS.some(m => m.id === selectedMap)) selectedMap = 'spiral';
+const bestKey = id => 'xenoSiegeBest:' + id;
 
 // ---------- Graphics quality ----------
-let quality = 'high';
-try { quality = localStorage.getItem('xenoSiegeGfx') || (matchMedia('(pointer: coarse)').matches ? 'low' : 'high'); } catch (e) {}
+let quality = store.get('xenoSiegeGfx', matchMedia('(pointer: coarse)').matches ? 'low' : 'high');
 view.setQuality(quality);
-$('quality').onclick = () => {
+function toggleQuality() {
   quality = quality === 'high' ? 'low' : 'high';
   view.setQuality(quality);
-  try { localStorage.setItem('xenoSiegeGfx', quality); } catch (e) {}
-};
+  store.set('xenoSiegeGfx', quality);
+}
+$('quality').onclick = toggleQuality;
+$('gfxHome').onclick = toggleQuality;
 
 new ResizeObserver(() => view.resize()).observe($('stage'));
+
+// ---------- Home screen ----------
+function drawMiniMap(cv, map) {
+  const W = cv.width = 192, H = cv.height = 120, g = cv.getContext('2d');
+  const k = Math.min(W / (map.cols + 1), H / (map.rows + 1)), ox = (W - map.cols * k) / 2, oz = (H - map.rows * k) / 2;
+  g.fillStyle = '#070c18'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#101a30';
+  for (let c = 0; c < map.cols; c++) for (let r = 0; r < map.rows; r++) if (!map.pathTiles.has(c + ',' + r)) g.fillRect(ox + c * k + 0.6, oz + r * k + 0.6, k - 1.2, k - 1.2);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for (const [w, col] of [[k * 0.95, 'rgba(77,243,201,0.25)'], [k * 0.3, '#4df3c9']]) {
+    g.strokeStyle = col; g.lineWidth = w;
+    for (const p of map.paths) { g.beginPath(); p.way.forEach((pt, i) => i ? g.lineTo(ox + pt.x * k, oz + pt.z * k) : g.moveTo(ox + pt.x * k, oz + pt.z * k)); g.stroke(); }
+  }
+  for (const p of map.paths) {
+    const a = p.way[0], b = p.way[1], L = Math.hypot(b.x - a.x, b.z - a.z);
+    g.fillStyle = '#9cff57'; g.shadowColor = '#9cff57'; g.shadowBlur = 8;
+    g.beginPath(); g.arc(ox + (a.x + (b.x - a.x) / L * 0.6) * k, oz + (a.z + (b.z - a.z) / L * 0.6) * k, k * 0.6, 0, 7); g.fill();
+  }
+  g.fillStyle = '#4df3c9'; g.shadowColor = '#4df3c9';
+  g.beginPath(); g.arc(ox + map.base.x * k, oz + map.base.z * k, k * 0.75, 0, 7); g.fill();
+  g.shadowBlur = 0;
+}
+function renderMapList() {
+  const list = $('mapList');
+  list.innerHTML = '';
+  for (const def of MAPS) {
+    const map = getMap(def.id), best = +store.get(bestKey(def.id), 0);
+    const b = document.createElement('button');
+    b.className = 'mapCard' + (def.id === selectedMap ? ' sel' : '');
+    b.innerHTML = `<canvas></canvas><div><div class="mn">${def.name} <span class="chip d-${def.difficulty}">${def.difficulty}</span></div>
+      <div class="md">${def.desc}</div><div class="mb">${best ? `Best: survived ${best} wave${best === 1 ? '' : 's'}` : (def.lanes.length > 1 ? def.lanes.length + ' rifts' : 'Not played yet')}</div></div>`;
+    drawMiniMap(b.querySelector('canvas'), map);
+    b.onclick = () => {
+      if (selectedMap === def.id) { play(); return; }
+      selectedMap = def.id; store.set('xenoSiegeMap', def.id);
+      for (const c of list.children) c.classList.toggle('sel', c === b);
+      $('playBtn').textContent = 'PLAY — ' + def.name.toUpperCase();
+      startDemo();
+    };
+    list.appendChild(b);
+  }
+  $('playBtn').textContent = 'PLAY — ' + getMap(selectedMap).name.toUpperCase();
+}
+$('playBtn').onclick = () => play();
+$('howBtn').onclick = () => $('howPanel').classList.toggle('hidden');
+
+// A live battle behind the home screen: maxed-out towers vs. an endless swarm.
+const DEMO_TYPES = [['gatling', 'minigun'], ['mortar', 'cluster'], ['arc', 'storm'], ['missile', 'hydra'], ['cryo', 'shatter'], ['gatling', 'railgun'],
+  ['mortar', 'singularity'], ['arc', 'lance'], ['missile', 'nuke'], ['gatling', 'minigun'], ['arc', 'storm'], ['cryo', 'zero']];
+function startDemo() {
+  game.setMap(selectedMap);
+  game.demo = true;
+  view.loadMap(game.map);
+  game.credits = 1e9;
+  const spots = rankBuildSpots(game.map, 3.2);
+  let n = 0;
+  for (const s of spots) {
+    if (n >= DEMO_TYPES.length) break;
+    if (!game.canBuild(s.c, s.r) || game.towers.some(t => Math.abs(t.c - s.c) + Math.abs(t.r - s.r) < 2)) continue;
+    const [type, br] = DEMO_TYPES[n++];
+    const t = game.build(type, s.c, s.r);
+    for (const lvl of [2, 3, 4]) { game.upgrade(t, { ...upgradeOptions(t).find(o => !o.branch || o.branch === br), cost: 0 }); t.busy = 0; }
+  }
+  game.events.length = 0;
+  game.wave = 7; game.launch(); game.events.length = 0;
+}
+
+function showHome() {
+  ui.mode = 'home'; ui.build = null; ui.selected = null; ui.paused = false; ui.speed = 1;
+  hideOverlay();
+  document.body.classList.add('home');
+  renderMapList();
+  startDemo();
+  updateHomeInset();
+}
+// Frame the demo battle in the part of the screen the home menu doesn't cover.
+function updateHomeInset() {
+  if (ui.mode !== 'home') { view.setInset(0, 0); return; }
+  const col = document.querySelector('.homeCol').getBoundingClientRect(), stage = canvas.getBoundingClientRect();
+  if (col.width >= stage.width * 0.9) view.setInset(0, Math.max(0, stage.bottom - col.top));
+  else view.setInset(Math.max(0, col.right - stage.left), 0);
+  view.resetCamera();
+}
+window.addEventListener('resize', () => requestAnimationFrame(updateHomeInset));
+
+function play() {
+  ui.mode = 'game'; ui.build = null; ui.selected = null; ui.paused = false; ui.speed = 1;
+  document.body.classList.remove('home');
+  hideOverlay();
+  view.setInset(0, 0);
+  game.setMap(selectedMap);
+  game.demo = false;
+  view.loadMap(game.map);
+  setText('mapName', `${game.map.name} · ${game.map.difficulty}`);
+  banner(game.map.name.toUpperCase(), '#4df3c9');
+  canvas.focus({ preventScroll: true });
+}
 
 // ---------- Build buttons ----------
 const tb = $('towerBtns');
@@ -47,7 +152,8 @@ function setBuild(type) {
 }
 
 // ---------- Actions ----------
-function launch() { if (ui.started) game.launch(); }
+const playing = () => ui.mode === 'game' && !game.over;
+function launch() { if (playing()) game.launch(); }
 function doUpgrade(i) {
   const t = ui.selected; if (!t) return;
   const opt = upgradeOptions(t)[i ?? 0];
@@ -57,7 +163,8 @@ function doSell() { if (ui.selected) { game.sell(ui.selected); ui.selected = nul
 
 $('launch').onclick = launch;
 $('speed').onclick = () => { ui.speed = ui.speed === 1 ? 2 : ui.speed === 2 ? 3 : 1; };
-$('pause').onclick = () => { if (ui.started && !game.over) ui.paused = !ui.paused; };
+$('pause').onclick = () => { if (playing()) ui.paused = !ui.paused; };
+$('menuBtn').onclick = () => showMenu();
 $('zoomIn').onclick = () => { const r = canvas.getBoundingClientRect(); view.zoomAt(0.8, r.left + r.width / 2, r.top + r.height / 2); };
 $('zoomOut').onclick = () => { const r = canvas.getBoundingClientRect(); view.zoomAt(1.25, r.left + r.width / 2, r.top + r.height / 2); };
 $('recenter').onclick = () => view.resetCamera();
@@ -73,12 +180,14 @@ let gesture = null;
 const pdist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 function updateHover(x, y) {
-  const t = view.tileAt(x, y);
-  ui.hover = t && t.c >= 0 && t.r >= 0 && t.c < 24 && t.r < 15 ? { c: t.c, r: t.r } : null;
+  if (ui.mode !== 'game') { ui.hover = null; return; }
+  const t = view.tileAt(x, y), m = game.map;
+  ui.hover = t && t.c >= 0 && t.r >= 0 && t.c < m.cols && t.r < m.rows ? { c: t.c, r: t.r } : null;
 }
 function tap(x, y) {
   updateHover(x, y);
-  if (!ui.started || game.over || !ui.hover) { if (!ui.hover) ui.selected = null; return; }
+  if (!playing() || ui.paused) return;
+  if (!ui.hover) { ui.selected = null; return; }
   const { c, r } = ui.hover;
   const existing = game.towerAt(c, r);
   if (ui.build) {
@@ -120,9 +229,7 @@ canvas.addEventListener('pointermove', ev => {
 function endPointer(ev, cancelled) {
   const p = pointers.get(ev.pointerId);
   pointers.delete(ev.pointerId);
-  if (!cancelled && p && gesture && gesture.type === 'tap' && pointers.size === 0) {
-    if (p.button === 0) tap(ev.clientX, ev.clientY);
-  }
+  if (!cancelled && p && gesture && gesture.type === 'tap' && pointers.size === 0 && p.button === 0) tap(ev.clientX, ev.clientY);
   if (pointers.size === 0) gesture = null;
   else if (gesture && gesture.type === 'pinch') gesture = { type: 'pan' };
 }
@@ -137,11 +244,17 @@ const keysDown = new Set();
 window.addEventListener('keydown', ev => {
   if (ev.key === 'Shift') ui.shift = true;
   keysDown.add(ev.key.toLowerCase());
-  if (!ui.started || game.over) return;
+  if (ui.mode === 'home') { if (ev.key === 'Enter') play(); return; }
+  if (ev.key === 'Escape') {
+    if (!$('overlay').classList.contains('hidden') && !game.over) { resume(); return; }
+    if (ui.build || ui.selected) { ui.build = null; ui.selected = null; return; }
+    if (!game.over) showMenu();
+    return;
+  }
+  if (!playing() || ui.paused) return;
   const t = TOWER_TYPES.find(k => TOWERS[k].key === ev.key);
   if (t) { setBuild(t); return; }
   if (ev.code === 'Space') { ev.preventDefault(); launch(); }
-  else if (ev.key === 'Escape') { ui.build = null; ui.selected = null; }
   else if (ev.key === 'p' || ev.key === 'P') ui.paused = !ui.paused;
   else if ((ev.key === 'u' || ev.key === 'U') && ui.selected && upgradeOptions(ui.selected).length === 1) doUpgrade(0);
   else if (ev.key === '+' || ev.key === '=') view.zoomAt(0.85, innerWidth / 2, innerHeight / 2);
@@ -150,6 +263,7 @@ window.addEventListener('keydown', ev => {
 window.addEventListener('keyup', ev => { if (ev.key === 'Shift') ui.shift = false; keysDown.delete(ev.key.toLowerCase()); });
 window.addEventListener('blur', () => { keysDown.clear(); ui.shift = false; });
 function keyPan(dt) {
+  if (ui.mode !== 'game') return;
   const s = 700 * dt;
   let dx = 0, dy = 0;
   if (keysDown.has('arrowleft') || keysDown.has('a')) dx += s;
@@ -182,9 +296,10 @@ function banner(text, color = '#4df3c9') {
   b.textContent = text; b.style.color = color;
   b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
 }
-view.onFlash = () => { const f = $('flash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); };
+view.onFlash = () => { if (ui.mode !== 'game') return; const f = $('flash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); };
 
 function handleUIEvents(events) {
+  if (ui.mode !== 'game') return;
   let leaked = 0;
   for (const ev of events) {
     switch (ev.e) {
@@ -193,12 +308,12 @@ function handleUIEvents(events) {
         else if (ev.swarm) banner(`WAVE ${ev.wave} — MEGA SWARM`, '#9cff57');
         else banner(`WAVE ${ev.wave}`);
         break;
-      case 'waveClear':
-        banner(`WAVE ${ev.wave} CLEARED  +${ev.bonus}`);
+      case 'waveClear': banner(`WAVE ${ev.wave} CLEARED  +${ev.bonus}`); break;
+      case 'early': {
+        const p = view.portals[0];
+        floatText(Math.max(0.5, p.x), 1, Math.max(0.5, p.z), `Early call +${ev.amount}`, '#4df3c9', 1.6);
         break;
-      case 'early':
-        floatText(1, 1, WAY[0].z, `Early call +${ev.amount}`, '#4df3c9', 1.6);
-        break;
+      }
       case 'leak': leaked += ev.dmg; break;
       case 'bossDown':
         banner('HIVE QUEEN DOWN', '#ffd166');
@@ -213,27 +328,47 @@ function handleUIEvents(events) {
       case 'gameOver': showGameOver(); break;
     }
   }
-  if (leaked) floatText(BASE.x, 1.5, BASE.z, `-${leaked} shields`, '#ff5c7a', 1.4);
+  if (leaked) floatText(game.map.base.x, 1.5, game.map.base.z, `-${leaked} shields`, '#ff5c7a', 1.4);
 }
 
-// ---------- Overlays ----------
+// ---------- Menus ----------
 function showOverlay(html) { $('card').innerHTML = html; $('overlay').classList.remove('hidden'); }
 function hideOverlay() { $('overlay').classList.add('hidden'); }
-$('startBtn').onclick = () => { ui.started = true; hideOverlay(); canvas.focus(); };
+function resume() { hideOverlay(); ui.paused = false; }
+function showMenu() {
+  if (ui.mode !== 'game' || game.over) return;
+  ui.paused = true;
+  showOverlay(`<h2>PAUSED</h2><p class="muted">${game.map.name} · wave ${game.wave}</p>
+    <div class="menuBtns">
+      <button class="b primary" id="mResume">RESUME</button>
+      <button class="b" id="mRestart">Restart this map</button>
+      <button class="b" id="mGfx">Graphics: ${quality === 'high' ? 'High' : 'Low'}</button>
+      <button class="b sell" id="mHome">Quit to home screen</button>
+    </div>`);
+  $('mResume').onclick = resume;
+  $('mRestart').onclick = () => play();
+  $('mGfx').onclick = () => { toggleQuality(); $('mGfx').textContent = 'Graphics: ' + (quality === 'high' ? 'High' : 'Low'); };
+  $('mHome').onclick = () => showHome();
+}
 function showGameOver() {
-  const survived = Math.max(0, game.wave - 1);
-  if (survived > best) { best = survived; try { localStorage.setItem('xenoSiegeBest3d', best); } catch (e) {} }
+  const survived = Math.max(0, game.wave - 1), key = bestKey(game.map.id);
+  const prev = +store.get(key, 0), isBest = survived > prev;
+  if (isBest) store.set(key, survived);
   showOverlay(`<h2 class="bad">BASE OVERRUN</h2>
-    <p>You held out to wave <b>${game.wave}</b> and vaporized <b>${game.kills.toLocaleString()}</b> aliens.</p>
-    <p style="color:var(--dim)">Best: survived ${best} wave${best === 1 ? '' : 's'}</p>
-    <button class="b primary" id="restartBtn">REDEPLOY</button>`);
-  $('restartBtn').onclick = () => { game.reset(); ui.selected = null; ui.build = null; ui.paused = false; ui.started = true; hideOverlay(); };
+    <p>${game.map.name}: you held out to wave <b>${game.wave}</b> and vaporized <b>${game.kills.toLocaleString()}</b> aliens.</p>
+    <p style="color:${isBest ? 'var(--gold)' : 'var(--dim)'}">${isBest ? 'New best on this map!' : `Best on this map: survived ${prev} wave${prev === 1 ? '' : 's'}`}</p>
+    <div class="menuBtns">
+      <button class="b primary" id="goRetry">TRY AGAIN</button>
+      <button class="b" id="goHome">Home screen</button>
+    </div>`);
+  $('goRetry').onclick = () => play();
+  $('goHome').onclick = () => showHome();
 }
 
 // ---------- Side panel ----------
 const cache = {};
-const setText = (id, v) => { if (cache[id] !== v) { cache[id] = v; $(id).textContent = v; } };
-const setHTML = (id, v) => { if (cache[id] !== v) { cache[id] = v; $(id).innerHTML = v; } };
+function setText(id, v) { if (cache[id] !== v) { cache[id] = v; $(id).textContent = v; } }
+function setHTML(id, v) { if (cache[id] !== v) { cache[id] = v; $(id).innerHTML = v; } }
 const fmt = n => Math.round(n).toLocaleString();
 
 const STAT_ROWS = [
@@ -261,7 +396,13 @@ function statTable(s, n) {
   }
   return h + '</table>';
 }
-
+function statsFor(type, lvl, branch) {
+  const d = TOWERS[type], s = { ...d.base };
+  if (lvl >= 2) Object.assign(s, d.l2);
+  if (branch && lvl >= 3) Object.assign(s, d.branches[branch].a);
+  if (branch && lvl >= 4) Object.assign(s, d.branches[branch].b);
+  return s;
+}
 function infoHTML() {
   const t = ui.selected;
   if (t) {
@@ -269,17 +410,13 @@ function infoHTML() {
     let h = `<h3 style="color:${d.color}">${towerName(t).toUpperCase()} · LV ${t.lvl}</h3>`;
     if (t.busy > 0) {
       const p = 1 - t.busy / t.busyMax;
-      h += statTable(t.s);
-      h += `<div class="muted">Upgrading… offline until complete</div><div class="prog"><div style="width:${(p * 100).toFixed(0)}%"></div></div>`;
+      h += statTable(t.s) + `<div class="muted">Upgrading… offline until complete</div><div class="prog"><div style="width:${(p * 100).toFixed(0)}%"></div></div>`;
     } else if (t.lvl === 2) {
-      h += statTable(t.s);
-      h += `<div class="muted">Choose a specialization:</div><div class="branches">` +
+      h += statTable(t.s) + `<div class="muted">Choose a specialization:</div><div class="branches">` +
         opts.map((o, i) => `<button class="branch" data-act="up" data-i="${i}" ${game.credits < o.cost ? 'disabled' : ''}><b>${o.label}</b><span>${o.desc}</span><i>◆ ${o.cost}</i></button>`).join('') + '</div>';
     } else if (opts.length) {
       const o = opts[0];
-      const nx = { ...t, lvl: o.lvl, branch: o.branch };
-      const ns = (() => { const s2 = Object.assign({}, d.base); if (nx.lvl >= 2) Object.assign(s2, d.l2); if (nx.branch && nx.lvl >= 3) Object.assign(s2, d.branches[nx.branch].a); if (nx.branch && nx.lvl >= 4) Object.assign(s2, d.branches[nx.branch].b); return s2; })();
-      h += statTable(t.s, ns);
+      h += statTable(t.s, statsFor(t.type, o.lvl, o.branch || t.branch));
       h += `<div class="row"><button class="b" data-act="up" data-i="0" ${game.credits < o.cost ? 'disabled' : ''}>Upgrade → ${o.label} ◆${o.cost}</button></div>`;
     } else {
       h += statTable(t.s) + '<div class="up">Fully upgraded</div>';
@@ -307,6 +444,7 @@ function infoKey() {
 let lastInfoKey = '';
 
 function updateUI() {
+  if (ui.mode !== 'game') { setText('gfxHome', quality === 'high' ? 'Gfx: High' : 'Gfx: Low'); return; }
   if (ui.selected && !game.towers.includes(ui.selected)) ui.selected = null;
   setText('sCred', fmt(Math.floor(game.credits)));
   setText('sLives', String(game.lives));
@@ -316,8 +454,7 @@ function updateUI() {
     b.classList.toggle('active', ui.build === type);
     b.classList.toggle('poor', game.credits < TOWERS[type].cost);
   }
-  const L = $('launch');
-  L.disabled = !ui.started || game.over || game.spawning;
+  $('launch').disabled = !playing() || game.spawning;
   setText('launch', game.spawning ? 'INCOMING…' : game.waveActive ? `CALL WAVE ${game.wave + 1} EARLY (+${10 + game.wave * 3})` : `LAUNCH WAVE ${game.wave + 1}`);
   setText('speed', `Speed ${ui.speed}×`);
   setText('pause', ui.paused ? 'Resume' : 'Pause');
@@ -326,40 +463,51 @@ function updateUI() {
   setHTML('nextWave', 'Next wave: ' + Object.entries(counts).map(([k, n]) => `<b>${n}</b> ${ALIENS[k].name}${n > 1 ? 's' : ''}`).join(', '));
   const k = infoKey();
   if (k !== lastInfoKey) { lastInfoKey = k; $('info').innerHTML = infoHTML(); }
-  $('pausedTag').style.display = ui.paused && ui.started && !game.over ? 'block' : 'none';
+  $('pausedTag').style.display = ui.paused && $('overlay').classList.contains('hidden') && !game.over ? 'block' : 'none';
 }
 
 // ---------- Main loop ----------
 let last = performance.now();
 function frame(now) {
-  const real = Math.min(0.05, (now - last) / 1000); last = now;
-  const running = ui.started && !ui.paused && !game.over;
-  if (running) for (let i = 0; i < ui.speed; i++) game.update(real);
+  const real = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+  let fxDt = 0;
+  if (ui.mode === 'home') {
+    game.update(real);
+    if (!game.waveActive) { game.wave = 7; game.launch(); }
+    view.cam.x = game.map.cols / 2 + Math.sin(now / 9000) * 0.8;
+    fxDt = real;
+  } else if (!ui.paused && !game.over) {
+    for (let i = 0; i < ui.speed; i++) game.update(real);
+    fxDt = real * Math.min(ui.speed, 2);
+  } else if (game.over) fxDt = real;
   keyPan(real);
   const canPlace = ui.build && ui.hover && game.canBuild(ui.hover.c, ui.hover.r) && game.credits >= TOWERS[ui.build].cost;
-  view.setPreview({ buildType: ui.build, hover: ui.hover, selected: ui.selected, canPlace });
-  view.frame(running ? real * Math.min(ui.speed, 2) : (game.over ? real : 0), game.events);
+  view.setPreview({ buildType: ui.mode === 'game' ? ui.build : null, hover: ui.mode === 'game' ? ui.hover : null, selected: ui.mode === 'game' ? ui.selected : null, canPlace });
+  view.frame(fxDt, game.events);
   handleUIEvents(game.events);
   game.events.length = 0;
   updateUI();
   updateFloats(real);
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
 
 // ---------- Installable app ----------
-if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !location.hostname.endsWith('claude.ai')) {
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 let installEvt = null;
-window.addEventListener('beforeinstallprompt', ev => { ev.preventDefault(); installEvt = ev; $('installBtn').classList.add('show'); });
-$('installBtn').onclick = async () => {
+const installBtns = [$('installBtn'), $('installBtn2')];
+window.addEventListener('beforeinstallprompt', ev => { ev.preventDefault(); installEvt = ev; installBtns.forEach(b => b.classList.add('show')); });
+installBtns.forEach(b => b.onclick = async () => {
   if (!installEvt) return;
   installEvt.prompt();
   try { await installEvt.userChoice; } catch (e) {}
-  installEvt = null; $('installBtn').classList.remove('show');
-};
-window.addEventListener('appinstalled', () => $('installBtn').classList.remove('show'));
+  installEvt = null; installBtns.forEach(x => x.classList.remove('show'));
+});
+window.addEventListener('appinstalled', () => installBtns.forEach(b => b.classList.remove('show')));
+
+showHome();
+requestAnimationFrame(frame);
 
 // Hook for automated tests
-window.__xeno = { game, view, ui };
+window.__xeno = { game, view, ui, play, showHome };

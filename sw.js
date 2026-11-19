@@ -1,6 +1,6 @@
 // Service worker: lets the installed app run offline.
 // Bump VERSION whenever you release a change so players pick it up.
-const VERSION = 'xeno-siege-v2';
+const VERSION = 'xeno-siege-v3';
 const FILES = [
   './',
   './index.html',

@@ -14,6 +14,19 @@ It's a Progressive Web App: no app store, and it works offline once installed.
 
 Installed copies update themselves the next time they're opened online.
 
+## Maps
+
+Pick a map on the home screen. Each one keeps its own best score.
+
+| Map | Difficulty | Layout |
+|---|---|---|
+| The Spiral | Easy | One very long lane coiling inward to a base in the centre |
+| Rift Valley | Normal | A single winding lane (the original map) |
+| Twin Rifts | Hard | Two rifts whose lanes merge halfway |
+| Hive Breach | Brutal | Three rifts converging on a short run to the base |
+
+Adding a map: add an entry to `MAPS` in `js/game.js` (lanes are lists of `[col, row]` waypoints that start just outside the grid and end on the base tile), then run `node tools/balance.mjs <mapId>` and adjust `hpScale` until it lands where you want.
+
 ## How to play
 
 | | |
@@ -23,7 +36,7 @@ Installed copies update themselves the next time they're opened online.
 | **Sell** | Tap a tower → Sell (70% refund). |
 | **Waves** | **Launch Wave** (or Space). Calling the next wave early earns bonus credits. |
 | **Camera** | Drag (or arrow keys / WASD) to pan, scroll wheel or pinch to zoom, ⤢ to see the whole map. |
-| **Other** | Esc / right-click cancels, P pauses, U upgrades the selected tower, **Gfx** switches High/Low graphics. |
+| **Other** | Esc cancels or opens the menu, right-click cancels, P pauses, U upgrades the selected tower, **Gfx** switches High/Low graphics. **☰ Menu** to restart or quit to the home screen. |
 
 ### Towers and specializations
 
@@ -48,10 +61,10 @@ Every 5th wave starting at wave 3 is a **mega swarm**.
 
 ```
 index.html              page layout and styles
-js/game.js              game rules: towers, aliens, waves, upgrades (no graphics, runs in Node too)
+js/game.js              game rules: maps, towers, aliens, waves, upgrades (no graphics, runs in Node too)
 js/view.js              3D rendering with Three.js: instanced aliens, effects, camera
 js/models.js            3D models for aliens and every tower form, built from simple shapes
-js/main.js              game loop, mouse/touch input, side panel, install prompt
+js/main.js              home screen + demo battle, game loop, mouse/touch input, side panel, menus
 vendor/three.bundle.js  Three.js + bloom post-processing, bundled (MIT licence in vendor/)
 tools/balance.mjs       balance bot: plays the game headlessly and reports per wave
 manifest.webmanifest    app name, icons, display mode for installing
@@ -61,6 +74,6 @@ icons/  fonts/          app icons; Orbitron and Rajdhani fonts (SIL Open Font Li
 
 No build step. To run locally: `python3 -m http.server 8000`, then open http://localhost:8000.
 
-**Balance testing:** `node tools/balance.mjs [seed]` runs a scripted player through the waves and prints shields, credits, tower levels and peak alien count per wave.
+**Balance testing:** `node tools/balance.mjs [mapId|all] [seed] [--verbose]` runs a scripted player (3 seeds) on each map and reports the first wave it leaked and the wave it lost on.
 
 **Releasing a change:** edit, bump `VERSION` in `sw.js` so installed copies refresh, commit, push. GitHub Pages redeploys automatically.

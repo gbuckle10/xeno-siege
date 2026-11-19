@@ -68,7 +68,59 @@ button.primary:hover:not(:disabled){filter:brightness(1.1)}
 button.sell{background:#2a1220;border-color:#5a2440;color:#ffb3c6}
 .next{font-size:13px;color:var(--dim)} .next b{color:var(--text);font-weight:600}
 .hint{font-size:12px;color:var(--dim);margin-top:auto;line-height:1.35}
-#installBtn{display:none}#installBtn.show{display:block}
+#installBtn,#installBtn2{display:none}#installBtn.show,#installBtn2.show{display:block}
+/* ---------- Home screen ---------- */
+body.home .panel,body.home .camctl,body.home #floats,body.home #banner{display:none}
+body.home .app{grid-template-columns:1fr}
+body.home .stage{border-color:transparent}
+#home{position:fixed;inset:0;z-index:20;display:none;pointer-events:none;
+  background:linear-gradient(90deg,rgba(3,5,11,.95) 0,rgba(3,5,11,.86) 400px,rgba(3,5,11,.25) 62%,rgba(3,5,11,0) 80%)}
+body.home #home{display:flex}
+.homeCol{pointer-events:auto;width:min(460px,100%);height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:12px;
+  padding:max(26px,env(safe-area-inset-top)) 26px max(20px,env(safe-area-inset-bottom)) max(26px,env(safe-area-inset-left))}
+.logo{font-family:Orbitron,monospace;font-weight:900;font-size:54px;line-height:.92;letter-spacing:.08em;
+  background:linear-gradient(180deg,#b9fff0,#4df3c9 55%,#1b9c7f);-webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 18px rgba(77,243,201,.45))}
+.tag{color:#9fb6d8;letter-spacing:.14em;text-transform:uppercase;font-size:13px;margin-top:-4px}
+.maps{display:flex;flex-direction:column;gap:8px}
+.mapCard{display:flex;gap:10px;align-items:center;text-align:left;background:rgba(10,16,32,.85);border:1px solid var(--line);border-radius:11px;
+  padding:7px;color:var(--text);font-family:inherit;cursor:pointer;transition:border-color .15s,transform .15s}
+.mapCard:hover{border-color:#3a5a8f}
+.mapCard.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset,0 0 22px rgba(77,243,201,.15)}
+.mapCard canvas{width:96px;height:60px;flex:0 0 96px;border-radius:6px;background:#060a14}
+.mapCard .mn{font-weight:700;font-size:16px;display:flex;gap:8px;align-items:center}
+.mapCard .md{font-size:12.5px;color:#a9bddd;line-height:1.25;margin-top:2px}
+.mapCard .mb{font-size:12px;color:var(--gold);margin-top:3px}
+.chip{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 6px;border-radius:5px;border:1px solid currentColor}
+.d-Easy{color:#9cff57}.d-Normal{color:#4df3c9}.d-Hard{color:#ff9f43}.d-Brutal{color:#ff5c7a}
+button.big{font-size:16px;padding:14px}
+.how{background:rgba(10,16,32,.9);border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-size:13.5px;line-height:1.4;color:#b5c8e6}
+.how.hidden{display:none}
+.how b{color:var(--text)}
+.how ul{margin:4px 0 0;padding-left:18px}
+.credit{font-size:11.5px;color:var(--dim);margin-top:auto}
+@media (max-aspect-ratio:4/5){
+  #home{background:none;align-items:flex-end}
+  .homeCol{width:100%;height:auto;max-height:100%;padding:34px 14px max(14px,env(safe-area-inset-bottom));
+    background:linear-gradient(0deg,rgba(3,5,11,.96) 0,rgba(3,5,11,.93) calc(100% - 40px),rgba(3,5,11,0) 100%)}
+  .logo{font-size:40px}
+  .maps{display:grid;grid-template-columns:1fr 1fr}
+  .mapCard{flex-direction:column;align-items:stretch;gap:5px}.mapCard canvas{width:100%;height:auto;aspect-ratio:8/5;flex:none}
+  .mapCard .md{display:none}
+}
+@media (orientation:landscape) and (max-height:560px){
+  .homeCol{width:min(400px,100%);padding:max(10px,env(safe-area-inset-top)) 14px 10px max(14px,env(safe-area-inset-left));gap:7px}
+  .logo{font-size:30px}.tag{font-size:11px}
+  .maps{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .mapCard{padding:5px;gap:6px}.mapCard canvas{width:56px;height:35px;flex-basis:56px}
+  .mapCard .mn{font-size:13px;flex-wrap:wrap;gap:4px}.mapCard .md{display:none}.mapCard .mb{font-size:11px;margin-top:0}
+  .chip{font-size:9px}
+  button.big{font-size:13px;padding:9px}
+}
+.homeCol>*{flex-shrink:0}.homeCol button.b{flex:none}.homeCol .row button.b{flex:1}
+.menuBtns{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.menuBtns button{margin:0;width:100%}
+
 /* on-canvas UI */
 #floats{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .fl{position:absolute;transform:translate(-50%,-50%);font-weight:700;font-size:15px;white-space:nowrap;text-shadow:0 1px 4px #000,0 0 8px currentColor}
@@ -118,7 +170,28 @@ button.sell{background:#2a1220;border-color:#5a2440;color:#ffb3c6}
 }
 </style>
 </head>
-<body>
+<body class="home">
+<div id="home">
+  <div class="homeCol">
+    <div class="logo">XENO<br>SIEGE</div>
+    <div class="tag">Hold the lane · Burn the swarm</div>
+    <div class="maps" id="mapList"></div>
+    <button class="b primary big" id="playBtn">PLAY</button>
+    <div class="row"><button class="b" id="howBtn">How to play</button><button class="b" id="gfxHome">Gfx: High</button></div>
+    <button class="b" id="installBtn2">⬇ Install as app</button>
+    <div class="how hidden" id="howPanel">
+      <b>Goal:</b> aliens pour out of the green rifts and march down the lanes. Each one that reaches your base drains shields. Lose all 100 and it's over.
+      <ul>
+        <li><b>Build:</b> pick a tower, then tap an empty pad beside a lane.</li>
+        <li><b>Upgrade:</b> tap a tower. Level 2, then choose one of two specializations, then Mk II. Towers go offline for a few seconds while upgrading.</li>
+        <li><b>Waves:</b> press Launch. Calling a wave early pays a bonus.</li>
+        <li><b>Camera:</b> drag to pan, scroll or pinch to zoom.</li>
+        <li><b>Tip:</b> Shellbacks are armored. Railguns, Arc Coils and Ion Lances ignore armor.</li>
+      </ul>
+    </div>
+    <div class="credit">v3 · made with Claude</div>
+  </div>
+</div>
 <div class="app">
   <div class="stage" id="stage">
     <canvas id="game" tabindex="0" aria-label="Game board"></canvas>
@@ -131,18 +204,11 @@ button.sell{background:#2a1220;border-color:#5a2440;color:#ffb3c6}
       <button id="zoomOut" title="Zoom out">−</button>
       <button id="recenter" title="Show whole map">⤢</button>
     </div>
-    <div id="overlay" class="overlay">
-      <div class="card" id="card">
-        <h2>XENO SIEGE</h2>
-        <p>The swarm is pouring through the rift. Hold the lane and protect your base.</p>
-        <p style="color:var(--dim);font-size:14px">Pick a tower, then tap a pad to build it. Tap a tower to upgrade it: level 2, then choose one of two specializations, then Mk II. Drag to move the camera, scroll or pinch to zoom.</p>
-        <button class="b primary" id="startBtn">DEPLOY</button>
-      </div>
-    </div>
+    <div id="overlay" class="overlay hidden"><div class="card" id="card"></div></div>
   </div>
   <aside class="panel">
-    <h1>XENO SIEGE</h1>
-    <div class="sub">Alien swarm tower defense · v2</div>
+    <div class="row" style="align-items:center"><h1 style="flex:1">XENO SIEGE</h1><button class="b" id="menuBtn" style="flex:none;padding:6px 10px">☰ Menu</button></div>
+    <div class="sub" id="mapName">Rift Valley</div>
     <div class="ptop">
     <div class="stats">
       <div class="stat"><span>Credits</span><b id="sCred">0</b></div>
